@@ -32,10 +32,6 @@ install_requires = [
 packages = ["dask_cuml",
             "dask_cuml.tests"]
 
-try:
-  numpy_include = numpy.get_include()
-except AttributeError:
-  numpy_include = numpy.get_numpy_include()
   
 setup(name = "dask_cuml",
       description = "Distributed machine on GPUs using Dask",
@@ -46,10 +42,10 @@ setup(name = "dask_cuml",
       ],
       author = "NVIDIA Corporation",
       setup_requires=[],
-      url = "https://github.com/rapidsai/dask_cuml",
+      #url = "https://github.com/rapidsai/dask_cuml",
       install_requires = install_requires,
       license = "Apache Software License 2.0",
-      cmdclass = versioneer.get_cmdClass(),
+      cmdclass = versioneer.get_cmdclass(),
       packages = packages,
       zip_safe = False
 )
