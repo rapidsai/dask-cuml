@@ -1,0 +1,6 @@
+recursive-include dask_cuml *.py
+include versioneer.py
+include setup.py
+include README.md
+include LICENSE.txt
+include MANIFEST.in
