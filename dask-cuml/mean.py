@@ -1,22 +1,24 @@
 import dask_cudf
-from cuml import Mean
+from cuML import Mean
 import numpy as np
+import cudf
 
-class Mean(object):
-    
-    def calculate(self, dask_cudf):
-
-        # Calculate the mean using the GPUs
-        def calc_mean(df):
-            m = Mean()
-            
-            mus = m.calculate(df)
-            headers = df.columns.tolist()
-            
-            return cudf.DataFrame.from_dict({"mean": mus, "col": headers})
-            
-        # Map each partition to GPU on local worker
-        dask_cudf = dask_cudf.map_partitions(m.calculate)
-        
-        # Merge means together across all partitions
-        return dask_cudf.group_by("mean").mean()
+# TODO: Let's not rely totally on dask-cudf... 
+# if they only want to use our dask_cuml.Array, 
+# they shouldn't need the other as a dependency.
+class NewMean(object):
+    def calculate(self, dask_df):
+      # TODO: Should data be verified float?
+      def calc_mean(df): 
+        m = Mean()
+        mu = m.calculate(df)
+        return cudf.DataFrame([("mean", mu), ("col", range(0, len(df.columns.tolist())))])
+      mu_df = dask_df.map_partitions(calc_mean)
+      
+      # The following hack is only for demo purposes. Once cudf is fixed to have 
+      # Groupby->apply functionality, this can all be done in the dask layer. 
+      
+      # Once cuml performs the harder work of calculating the mean for each 
+      # partition, we only have npartitions number of reductions to perform
+      # on ncols number of columns.
+      return dask_cudf.from_cudf(mu_df.compute().groupby("col").mean())
