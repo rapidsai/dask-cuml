@@ -14,7 +14,6 @@
 # limitations under the License.
 #
 
-from .mean import mean
 
 from dask_cuml._version import get_versions
 __version__ = get_versions()['version']
@@ -22,4 +21,5 @@ del get_versions
 
 __all__ = [
     "MGMean",
+    "*"
 ]

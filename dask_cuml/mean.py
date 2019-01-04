@@ -14,6 +14,8 @@
 #
 from cuml import MGMean as cumlMGMean
 
+import core
+
 from tornado import gen
 import dask_cudf, cudf
 
@@ -41,7 +43,9 @@ def parse_host_port(address):
 
 def to_gpu_matrix(df):
     rm = df.as_gpu_matrix(order='F')
-    print(str(rm.device_ctypes_pointer))
+
+    print("GPU: " + str(rm))
+    print("CTYPES: "+ str(rm.device_ctypes_pointer))
     return rm
 
 
@@ -57,7 +61,14 @@ def get_ipc_handles(gpu_matrix):
     return gpu_matrix.get_ipc_handle()
 
 
+def print_it(gpu_matrix):
+
+    print("gpu:  " + str(gpu_matrix))
+    print("out: " + str(gpu_matrix[0][0]))
+    return gpu_matrix
+
 class MGMean(object):
+
 
     def calculate(self, dask_df):
         client = default_client()
@@ -66,14 +77,24 @@ class MGMean(object):
         # deallocated on the workers.
         ipcs, gpu_futures, ipc_futures = client.sync(self._get_mg_info, dask_df)
 
+
+
+        # The parts below should be run on a single worker on each unique host
+
+
+
+
         open_ipcs = [x.open() for x in ipcs]
 
-        print(str([x.device_ctypes_pointer for x in open_ipcs]))
+        dud = [client.submit(print_it, future, workers=worker) for worker, future in gpu_futures]
+        wait(dud)
 
         m = cumlMGMean()
         outs = m.calculate(list(map(alloc_dict, open_ipcs)))
 
         [x.close() for x in ipcs]
+
+
 
         return outs
 
@@ -82,16 +103,19 @@ class MGMean(object):
 
         client = default_client()
 
-        data_parts = dask_df.to_delayed()
-        parts = list(map(delayed, data_parts))
-        parts = client.compute(parts)  # Start computation in the background
-        yield wait(parts)
+        if isinstance(dask_df, dd.DataFrame):
+            data_parts = dask_df.to_delayed()
+            parts = list(map(delayed, data_parts))
+            parts = client.compute(parts)  # Start computation in the background
+            yield wait(parts)
+            for part in parts:
+                if part.status == 'error':
+                    yield part  # trigger error locally
+        else:
+            data_parts = dask_df
 
-        for part in parts:
-            if part.status == 'error':
-                yield part  # trigger error locally
 
-        key_to_part_dict = dict([(str(part.key), part) for part in parts])
+        key_to_part_dict = dict([(str(part.key), part) for part in data_parts])
 
         who_has = yield client.who_has(data_parts)
         worker_map = []
