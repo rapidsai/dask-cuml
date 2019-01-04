@@ -102,3 +102,9 @@ ENV/
 
 # vscode
 .vscode
+
+# PyCharm
+.idea/
+
+# Dask
+dask-worker-space/

@@ -31,7 +31,7 @@ install_requires = [
 packages = ["dask_cuml",
             "dask_cuml.tests"]
 
-  
+
 setup(name = "dask_cuml",
       description = "Distributed machine on GPUs using Dask",
       version = versioneer.get_version(),
