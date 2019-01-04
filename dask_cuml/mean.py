@@ -14,8 +14,6 @@
 #
 from cuml import MGMean as cumlMGMean
 
-import core
-
 from tornado import gen
 import dask_cudf, cudf
 
