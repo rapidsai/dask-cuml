@@ -108,3 +108,5 @@ ENV/
 
 # Dask
 dask-worker-space/
+*.dirlock
+*.lock
