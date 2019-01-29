@@ -14,7 +14,7 @@
 #
 from .core import parse_host_port, IPCThread, build_host_dict, select_device
 
-from cuml import MGMean as cumlMGMean
+from cuml import MGKNN as cumlMGKNN
 import logging
 
 import random
@@ -39,7 +39,6 @@ import numpy as np
 from toolz import first, assoc
 
 import numba.cuda
-
 
 def to_gpu_matrix(inp):
     dev, df = inp
@@ -89,22 +88,21 @@ def to_pandas(data):
 
 
 # Run on a single worker on each unique host
-def calc_mean(data):
+def _fit(data):
     ipcs, raw_arrs = data
 
-    # Get device from local gpu_futures
+    # Get device from local gpu_futures (should be the same)
     select_device(raw_arrs[0][0])
-
-    print("begin calc_mean_device: " + str(numba.cuda.get_current_device()))
 
     def new_ipc_thread(dev, ipcs):
         t = IPCThread(ipcs, dev)
         t.start()
         return t
 
+    # Separate threads to hold pointers to separate devices
     open_ipcs = [new_ipc_thread(dev, [inp, outp]) for dev, inp, outp in ipcs]
-    logging.debug("calc_mean_device: " + str(numba.cuda.get_current_device()))
-    m = cumlMGMean()
+
+    m = cumlMGKNN()
 
     alloc_info = [t.info() for t in open_ipcs]
     alloc_info.extend([build_alloc_info(t) for t in raw_arrs])
@@ -116,15 +114,97 @@ def calc_mean(data):
     return open_ipcs, raw_arrs
 
 
-class MGMean(object):
 
-    def calculate(self, futures):
+class MGKNN(object):
+    """
+    Data-parallel Multi-Node Multi-GPU kNN Model.
 
+    Data is spread across Dask workers. On each node, a single worker creates a series of indices, one for each
+    chunk of the Dask input. Each unique hostname is assigned a monotonically increasing identifier, which is
+    used is added to the resulting indices so that queries can be reconstructed properly.
+    """
+
+    def fit(self, futures):
+        """
+        Fits a multi-node multi-gpu knn model, each node using their own index structure underneath.
+        :param futures:
+        :return:
+        """
         client = default_client()
 
         # Keep the futures around so the GPU memory doesn't get
         # deallocated on the workers.
         gpu_futures = client.sync(self._get_mg_info, futures)
+
+        f = []
+        for host, ports in self._build_host_dict(gpu_futures, client).items():
+
+            # Choose a random worker on each node to become the
+            # execution node.
+            exec_node = (host, random.sample(ports, 1)[0])
+
+            # build ipc handles
+            gpu_data_excl_worker = filter(lambda d: d[0] != exec_node, gpu_futures)
+            gpu_data_incl_worker = filter(lambda d: d[0] == exec_node, gpu_futures)
+
+            ipc_handles = [client.submit(get_ipc_handles, future, workers=[worker])
+                           for worker, future in gpu_data_excl_worker]
+
+            raw_arrays = [future for worker, future in gpu_data_incl_worker]
+
+            f.append(client.submit(_fit, (ipc_handles, raw_arrays), workers=[exec_node]))
+
+        wait(f)
+
+        # We can safely close our local threads now that the c++ API is holding onto
+        # its own resources.
+
+        def close_threads(d):
+            ipc_threads, rawarrays = d
+            [t.close() for t in ipc_threads]
+
+        d = [client.submit(close_threads, future) for future in f]
+        wait(d)
+
+        def join_threads(d):
+            ipc_threads, rawarrays = d
+            [t.join() for t in ipc_threads]
+
+        d = [client.submit(join_threads, future) for future in f]
+
+        wait(d)
+
+        # The model on each node is encapsulated within this model.
+        self.sub_models = f
+
+    def
+
+    def kneighbors(self, input):
+        """
+        Queries the multi-node multi-gpu knn model by propagating the query to each unique host.
+
+        :param input:
+        :return:
+            dists and indices of the k-nearest neighbors to the input vectors
+        """
+
+        # Retrieve k neighbors from 1 worker on each node and have 1 rank fetch results.
+
+        # Need to wrap the MNMG call for each of the self.sub_models to search.
+
+
+
+        pass
+
+    def get(self, indices):
+        """
+        Returns the vectors from the knn index for a list of indices.
+        :param indices:
+        :return:
+        """
+        pass
+
+    def _build_host_dict(self, gpu_futures, client):
 
         who_has = client.who_has(gpu_futures)
 
@@ -140,63 +220,11 @@ class MGMean(object):
                 hosts_to_key_dict[host].add(key)
 
         workers = [key[0] for key in list(who_has.values())]
-        hosts_dict = build_host_dict(workers)
-        f = []
-        for host, ports in hosts_dict.items():
-
-            # Schedule on one node for each worker
-            exec_node = (host, random.sample(ports, 1)[0])
-
-            logging.debug("Chosen exec node is " + str(exec_node))
-
-            # Don't build an ipc_handle for exec nodes (we can just grab the local data)
-            keys = set(hosts_to_key_dict[exec_node])
-
-            # build ipc handles
-            gpu_data_excl_worker = filter(lambda d: d[0] != exec_node, gpu_futures)
-            gpu_data_incl_worker = filter(lambda d: d[0] == exec_node, gpu_futures)
-
-            ipc_handles = [client.submit(get_ipc_handles, future, workers=[worker])
-                           for worker, future in gpu_data_excl_worker]
-            raw_arrays = [future for worker, future in gpu_data_incl_worker]
-
-            logging.debug(str(ipc_handles))
-            logging.debug(str(raw_arrays))
-
-            f.append(client.submit(calc_mean, (ipc_handles, raw_arrays), workers=[exec_node]))
-
-        wait(f)
-
-        def close_threads(d):
-            ipc_threads, rawarrays = d
-            [t.close() for t in ipc_threads]
-
-        d = [client.submit(close_threads, future) for future in f]
-        wait(d)
-
-        def join_threads(d):
-            ipc_threads, rawarrays = d
-            [t.join() for t in ipc_threads]
-
-        d = [client.submit(join_threads, future) for future in f]
-        wait(d)
-
-        # Row-split for now. Each result should have the mean for each column.
-        # Can simply groupby to combine into final array.
-        return client.gather([client.submit(to_pandas, future) for worker, future in gpu_futures])
+        return build_host_dict(workers)
 
 
     @gen.coroutine
     def _get_mg_info(self, futures):
-
-        """
-        Makes sure parts of futures are persisted on workers.
-
-        :param futures:
-            a dask.DataFrame or any list of futures
-        :return:
-            a list of tuples in the form of [(worker, future)]
-        """
 
         client = default_client()
 
