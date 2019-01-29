@@ -123,7 +123,7 @@ class LinearRegression(object):
 
         for part in parts:
             if part.status == 'error':
-                yield part  # trigger error locally        gpu_futures = client.sync(self._get_mg_info,input_data)
+                yield part  # trigger error locally
 
         # A dict in the form of { part_key: part }
         key_to_part_dict = dict([(str(part.key), part) for part in parts])
@@ -151,6 +151,13 @@ class LinearRegression(object):
             a dask-cudf containing outputs of the linear regression
         """
 
+        client = default_client()
 
+        # Need a function that can be run on each worker to gather together ipc handles of cudfs from all
+        # other workers.
 
+        # Once IPC handles are ready, need to use the threading trick to allow each worker to run
+        # the predict computation locally, using their local pointer.
+
+        # Turn resulting cudf future into a dask-cudf and return it.
         pass
