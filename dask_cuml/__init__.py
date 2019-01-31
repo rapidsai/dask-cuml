@@ -21,5 +21,7 @@ del get_versions
 
 __all__ = [
     "mean",
-    "core"
+    "core",
+    "linear_regression"
+
 ]

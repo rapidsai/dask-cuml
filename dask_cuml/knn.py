@@ -177,8 +177,6 @@ class MGKNN(object):
         # The model on each node is encapsulated within this model.
         self.sub_models = f
 
-    def
-
     def kneighbors(self, input):
         """
         Queries the multi-node multi-gpu knn model by propagating the query to each unique host.
@@ -189,6 +187,7 @@ class MGKNN(object):
         """
 
         # Retrieve k neighbors from 1 worker on each node and have 1 rank fetch results.
+
 
         # Need to wrap the MNMG call for each of the self.sub_models to search.
 
