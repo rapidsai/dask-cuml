@@ -50,8 +50,8 @@ def _fit(dfs):
         1. Create an empty numba array to hold the resulting coefficients
         2. Make call to cython function with list of cudfs
         3. Return resulting coefficients.
-    :param (X_cudf, y_cudf):
-        list of Numba device ndarray objects
+    :param [(X_cudf, y_cudf)]:
+        list of tuples of Numba device ndarray objects for X & y values
     """
 
     print("FIT CALLED: " + str(dfs))
@@ -79,7 +79,6 @@ def _predict(X_dfs, coeff_ptrs):
     :return:
         cudf containing predictions
     """
-
     print("PREDICT CALLED: " + str(X_dfs) + ", " + str(coeff_ptrs))
     return cudf.Series(np.zeros(4, dtype=np.float32))
 
