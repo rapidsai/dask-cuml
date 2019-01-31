@@ -427,11 +427,7 @@ class LinearRegression(object):
         :return:
             a dask-cudf containing outputs of the linear regression
         """
-
-        client = default_client()
-        ret = client.sync(self._do_predict, df)
-
-        print("RETURN: " + str(ret))
+        return default_client().sync(self._do_predict, df)
 
     def _build_host_dict(self, gpu_futures, client):
 
