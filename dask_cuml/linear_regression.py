@@ -16,7 +16,7 @@ from .core import parse_host_port, IPCThread, build_host_dict, select_device
 
 from threading import Lock, Thread
 
-from cuml import LinearRegression as cumlLinearRegression
+# from cuml import LinearRegression as cumlLinearRegression
 import cuml
 import logging
 
@@ -51,11 +51,20 @@ def _fit(dfs):
         2. Make call to cython function with list of cudfs
         3. Return resulting coefficients.
     :param [(X_cudf, y_cudf)]:
-        list of tuples of Numba device ndarray objects for X & y values
+        list of tuples of __cuda_device_array__ dicts for X & y values
     """
 
-    print("FIT CALLED: " + str(dfs))
-    return cudf.Series(np.zeros(10, dtype=np.float32))
+    print("CURRENT DEVICE: " + str(numba.cuda.get_current_device().id))
+
+    try:
+        # TODO: This allocation throws an error after the 2nd or third training of a model
+        # Somehow, the error seems to be related to pickle serialization. Very strange,
+        # considering there shouldn't be any pickling in this line.
+        ret = numba.cuda.to_device([1, 2, 3,4 ])
+        return ret
+    except Exception as e:
+        print("FAILURE in FIT: " + str(e))
+
 
 def _predict(X_dfs, coeff_ptrs):
     """
@@ -79,7 +88,6 @@ def _predict(X_dfs, coeff_ptrs):
     :return:
         cudf containing predictions
     """
-    print("PREDICT CALLED: " + str(X_dfs) + ", " + str(coeff_ptrs))
     return cudf.Series(np.zeros(4, dtype=np.float32))
 
 def _predict_on_worker(data):
@@ -95,8 +103,35 @@ def _predict_on_worker(data):
     coeff_alloc_info = [t.info() for t in open_ipcs]
     coeff_alloc_info.extend([build_alloc_info(t[0]) for t in devarrs])
 
+    try:
+        # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
+        m = _predict(parts, coeff_alloc_info)
+        return open_ipcs, devarrs, m
+
+    except Exception as e:
+        print("Failure: " + str(e))
+
+
+def _fit_on_worker(data):
+
+    print("DATA: " + str(data))
+
+    ipcs, devarrs = data
+
+    def new_ipc_thread(ipc):
+        t = FITIPCThread(ipc)
+        t.start()
+        return t
+
+    open_ipcs = [new_ipc_thread(p) for p in ipcs]
+
+    alloc_info = [t.info() for t in open_ipcs]
+    alloc_info.extend([(build_alloc_info(X)[0], build_alloc_info(y)[0]) for X,y in devarrs[0][0]])
+
     # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
-    m = _predict(parts, coeff_alloc_info)
+    m = _fit(alloc_info)
+
+    print("CALLED FIT! RETURNING")
 
     return open_ipcs, devarrs, m
 
@@ -128,9 +163,84 @@ class LRIPCThread(Thread):
         try:
             self.arrs = [ipc.open() for ipc in self.ipcs]
 
+            self.ptr_info = [x.__cuda_array_interface__ for x in self.arrs]
             print("IPCS: "+ str(self.ipcs))
             print("ARRS: "+ str(self.arrs))
-            self.ptr_info = [x.__cuda_array_interface__ for x in self.arrs]
+
+            self.running = True
+        except Exception as e:
+            logging.error("Error opening ipc_handle on device " + str(self.device) + ": " + str(e))
+
+        self.lock.release()
+
+        while (self.running):
+            time.sleep(0.01)
+
+        try:
+            logging.warn("Closing: " + str(self.device) + str(numba.cuda.get_current_device()))
+            self.lock.acquire()
+            [ipc.close() for ipc in self.ipcs]
+            self.lock.release()
+        except Exception as e:
+            logging.error("Error closing ipc_handle on device " + str(self.device) + ": " + str(e))
+
+    def close(self):
+
+        """
+        This should be called before calling join(). Otherwise, IPC handles may not be
+        properly cleaned up.
+        """
+        self.lock.acquire()
+        self.running = False
+        self.lock.release()
+
+    def info(self):
+        """
+        Warning: this method is invoked from the calling thread. Make
+        sure the context in the thread reading the memory is tied to
+        self.device, otherwise an expensive peer access might take
+        place underneath.
+        """
+        while (not self.running):
+            time.sleep(0.0001)
+
+        return self.ptr_info
+
+class FITIPCThread(Thread):
+    """
+    This mechanism gets around Numba's restriction of CUDA contexts being thread-local
+    by creating a thread that can select its own device. This allows the user of IPC
+    handles to open them up directly on the same device as the owner (bypassing the
+    need for peer access.)
+    """
+    def __init__(self, ipcs):
+
+        Thread.__init__(self)
+
+        Xy, dev = ipcs
+
+        self.lock = Lock()
+        self.ipcs = [d for d in Xy]
+
+        print("self.ipcs=" + str(self.ipcs))
+
+        self.device = dev
+        self.running = False
+
+    def run(self):
+
+        select_device(self.device)
+
+        print("Opening: " + str(self.device) + " " + str(numba.cuda.get_current_device()))
+
+        self.lock.acquire()
+
+        try:
+            self.arrs = [(X.open(), y.open()) for X,y in self.ipcs]
+
+            print("IPCS: "+ str(self.ipcs))
+            print("ARRS: "+ str(self.arrs))
+            self.ptr_info = [(X.__cuda_array_interface__, y.__cuda_array_interface__) for X,y in self.arrs]
 
             self.running = True
         except Exception as e:
@@ -144,7 +254,7 @@ class LRIPCThread(Thread):
         try:
             logging.warn("Closing: " + str(self.device) + str(numba.cuda.get_current_device()))
             self.lock.acquire()
-            [ipc.close() for ipc in self.ipcs]
+            [(X.close(), y.close()) for X,y in self.ipcs]
             self.lock.release()
         except Exception as e:
             logging.error("Error closing ipc_handle on device " + str(self.device) + ": " + str(e))
@@ -178,13 +288,56 @@ def build_alloc_info(p): return [p.__cuda_array_interface__]
 def get_ipc_handles(arr): return arr[0].get_ipc_handle(), arr[1]
 
 
+def get_input_ipc_handles(arr):
+
+    arrs, dev = arr
+    print("input_ipc_handles: " + str(arr))
+
+    ret = [(X.get_ipc_handle(), y.get_ipc_handle()) for X, y in arrs]
+
+    return ret, dev
+
+
 def as_gpu_matrix(arr):
     mat = arr.as_gpu_matrix(order="F")
-    return mat, cuml.device_of_ptr(mat.device_ctypes_pointer.value)
+
+    import os
+    dev = cuml.device_of_ptr(mat.device_ctypes_pointer.value)
+    print("dev_of_ptr: " + str(dev))
+    print("DEVICE: " + str(numba.cuda.get_current_device()))
+    return mat, dev
 
 def to_gpu_array(arr):
     mat = arr.to_gpu_array()
-    return mat, cuml.device_of_ptr(mat.device_ctypes_pointer.value)
+
+    import os
+    dev = cuml.device_of_ptr(mat.device_ctypes_pointer.value)
+    print("dev_of_ptr: " + str(dev))
+    print("DEVICE: " + str(numba.cuda.get_current_device()))
+    return mat, dev
+
+
+def inputs_to_device_arrays(arr):
+    """
+    :param arr:
+        A tuple in the form of (X, y)
+    :return:
+    """
+
+    print("HANDLES: "+ str(arr))
+
+    mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
+
+    # Both X & y should be on the same device at this point (by being on the same worker)
+    import os
+    dev = cuml.device_of_ptr(mats[0][0].device_ctypes_pointer.value)
+    print("dev_of_ptr: " + str(dev))
+    print("DEVICE: " + str(numba.cuda.get_current_device()))
+
+    print("MATS: " + str(mats))
+    print("dev=" + str(dev))
+
+    return mats, dev
 
 
 class LinearRegression(object):
@@ -252,30 +405,99 @@ class LinearRegression(object):
             if part.status == 'error':
                 yield part  # trigger error locally
 
+
+        print("parts=" + str(parts))
+
         # A dict in the form of { part_key: part }
         key_to_part_dict = dict([(str(part.key), part) for part in parts])
 
-        who_has = yield client.who_has(parts)
+        print("key_to_part_dict=" + str(key_to_part_dict))
 
-        print(str(who_has))
+        who_has = yield client.who_has(parts)
 
         worker_parts = {}
         for key, workers in who_has.items():
-
-            print(str(workers))
             worker = parse_host_port(first(workers))
             if worker not in worker_parts:
                 worker_parts[worker] = []
             worker_parts[worker].append(key_to_part_dict[key])
 
-        print(str(worker_parts))
+        # coeffs = [(worker, client.submit(_fit, keys, workers = [worker]))
+        #           for worker, keys in worker_parts.items()]
 
-        coeffs = [(worker, client.submit(_fit, keys, workers = [worker]))
-                  for worker, keys in worker_parts.items()]
+        """
+        Create IP Handles on each worker hosting input data 
+        """
 
-        yield wait(coeffs)
+        # Format of input_devarrays = ([(X, y)..], dev)
+        input_devarrays = [(worker, client.submit(inputs_to_device_arrays, part, workers=[worker]))
+                    for worker, part in worker_parts.items()]
 
-        raise gen.Return(coeffs)
+
+        who_has = yield client.who_has()
+
+
+        yield wait(input_devarrays)
+
+        print(str(input_devarrays))
+        print(str(who_has))
+
+
+        """
+        Gather IPC handles for each worker and call _fit() on each worker containing data.
+        """
+        print("WORKER_PARTS: " + str(worker_parts))
+
+        worker_results = {}
+        res = []
+        for worker, parts in worker_parts.items():
+
+            print("WORKER: " + str(worker))
+
+            # Need to fetch coefficient parts on worker
+            on_worker = list(filter(lambda x: x[0] == worker, input_devarrays))
+            not_on_worker = list(filter(lambda x: x[0] != worker, input_devarrays))
+
+            print("ON_WORKER: "+ str(list(on_worker)))
+            print("NOT_ON_WORKER: " + str(list(not_on_worker)))
+
+            ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
+                           for a_worker, future in not_on_worker]
+
+            raw_arrays = [future for a_worker, future in on_worker]
+
+            # IPC Handles are loaded in separate threads on worker so they can be
+            # used to make calls through cython
+            worker_results[worker] = client.submit(_fit_on_worker,
+                                                    (ipc_handles, raw_arrays), workers=[worker])
+
+            res.append(worker_results[worker])
+
+        yield wait(res)
+
+        def close_threads(d):
+            ipc_threads, devarrs, result = d
+            [t.close() for t in ipc_threads]
+
+        d = [client.submit(close_threads, future) for future in res]
+        yield wait(d)
+
+        def join_threads(d):
+            ipc_threads, devarrs, result = d
+            [t.join() for t in ipc_threads]
+
+        d = [client.submit(join_threads, future) for future in res]
+        yield wait(d)
+
+        def get_result(d):
+            ipc_threads, devarrs, result = d
+            return result
+
+        ret = [(worker, client.submit(get_result, futures, workers= [worker]))
+               for worker, futures in worker_results.items()]
+
+        yield wait(ret)
+        raise gen.Return(ret)
 
     def fit(self, X_df, y_df):
         """
@@ -303,8 +525,6 @@ class LinearRegression(object):
 
         key_to_part_dict = dict([(str(part.key), part) for part in data_parts])
 
-        print("KEY_TO_PART_DICT: "+ str(key_to_part_dict))
-
         """
         Build map of workers to parts
         """
@@ -320,15 +540,7 @@ class LinearRegression(object):
         """
         Build Numba devicearrays for all coefficient chunks        
         """
-
-        print("CEFFS: " + str(self.coeffs))
-
-        who_has = yield client.who_has()
-        print(str(who_has))
-
         coeff_keys = [coeff[1] for coeff in self.coeffs]
-
-        print("COEFF KEYS: " + str(coeff_keys))
 
         who_has = yield client.who_has(coeff_keys)
 
@@ -404,12 +616,7 @@ class LinearRegression(object):
         # pointing to the data.
         ret = [client.submit(get_result, future) for future in res]
 
-        print("RETURN: "+ str(ret))
-
         yield wait(ret)
-
-        print("RETURN: "+ str(ret))
-
         return gen.Return(ret)
 
     def predict(self, df):
