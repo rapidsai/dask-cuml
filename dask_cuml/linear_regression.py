@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-from .core import parse_host_port, IPCThread, build_host_dict, select_device
+from .core import *
 
 from threading import Lock, Thread
 
 # from cuml import LinearRegression as cumlLinearRegression
 import cuml
 import logging
+
+import itertools
 
 import random
 
@@ -57,10 +59,10 @@ def _fit(dfs):
     print("CURRENT DEVICE: " + str(numba.cuda.get_current_device().id))
 
     try:
-        # TODO: This allocation throws an error after the 2nd or third training of a model
-        # Somehow, the error seems to be related to pickle serialization. Very strange,
+        # TODO: Using Series for coeffs throws an error after the 2nd or third training of a model
+        # The error is related to the bitmask or pickle serialization. Very strange,
         # considering there shouldn't be any pickling in this line.
-        ret = numba.cuda.to_device([1, 2, 3,4 ])
+        ret = cudf.DataFrame([('a', np.array([1, 2, 3, 4]))])
         return ret
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
@@ -88,210 +90,100 @@ def _predict(X_dfs, coeff_ptrs):
     :return:
         cudf containing predictions
     """
-    return cudf.Series(np.zeros(4, dtype=np.float32))
+
+    print("Called _predict()")
+
+    return cudf.DataFrame([('a', [1, 2, 3, 4, 5])])
 
 def _predict_on_worker(data):
-    parts, ipcs, devarrs = data
+    coeffs, ipcs, devarrs = data
 
-    def new_ipc_thread(ipc):
-        t = LRIPCThread(ipc)
-        t.start()
-        return t
+    print("PREDICT IPCS: "+ str(ipcs))
+    print("PREDICT DEVARRS: " + str(devarrs))
 
-    open_ipcs = [new_ipc_thread(p) for p in ipcs]
+    dev_ipcs = {}
+    for p, dev in ipcs:
+        if dev not in dev_ipcs:
+            dev_ipcs[dev] = []
+        dev_ipcs[dev].append(p)
 
-    coeff_alloc_info = [t.info() for t in open_ipcs]
-    coeff_alloc_info.extend([build_alloc_info(t[0]) for t in devarrs])
+    open_ipcs = [new_ipc_thread(p, dev) for dev, p in dev_ipcs.items()]
+
+    alloc_info = [t.info() for t in open_ipcs]
+    alloc_info.extend([build_alloc_info(t) for t, dev in devarrs])
 
     try:
         # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
-        m = _predict(parts, coeff_alloc_info)
+        m = _predict(coeffs, alloc_info)
+
+        print("Returned from PREDICT")
+
         return open_ipcs, devarrs, m
 
     except Exception as e:
         print("Failure: " + str(e))
 
+def close_threads(d):
+    ipc_threads, devarrs, result = d
+    [t.close() for t in ipc_threads]
+
+def join_threads(d):
+    ipc_threads, devarrs, result = d
+    [t.join() for t in ipc_threads]
+
+
+def get_result(d):
+
+    print("get_result:  " + str(d))
+
+    ipc_threads, devarrs, result = d
+    return result
+
+def group(lst, n):
+  for i in range(0, len(lst), n):
+    val = lst[i:i+n]
+    if len(val) == n:
+      yield tuple(val)
+
+
 
 def _fit_on_worker(data):
 
-    print("DATA: " + str(data))
+    ipc_dev_list, devarrs_dev_list = data
 
-    ipcs, devarrs = data
+    print("DEV_ARRS_LIST: " + str(devarrs_dev_list))
 
-    def new_ipc_thread(ipc):
-        t = FITIPCThread(ipc)
-        t.start()
-        return t
+    open_ipcs = [new_ipc_thread(itertools.chain([[X,y] for X,y in p]), dev) for p, dev in ipc_dev_list]
 
-    open_ipcs = [new_ipc_thread(p) for p in ipcs]
+    alloc_info = [group(t.info(), 2) for t in open_ipcs]
 
-    alloc_info = [t.info() for t in open_ipcs]
-    alloc_info.extend([(build_alloc_info(X)[0], build_alloc_info(y)[0]) for X,y in devarrs[0][0]])
+    print(str("ALLOC INFO: " + str(alloc_info)))
+
+    alloc_info.extend(
+        list(itertools.chain(
+            [[(build_alloc_info(X)[0], build_alloc_info(y)[0]) for X,y in p]
+             for p, dev in devarrs_dev_list])))
 
     # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
     m = _fit(alloc_info)
 
-    print("CALLED FIT! RETURNING")
-
-    return open_ipcs, devarrs, m
-
-
-class LRIPCThread(Thread):
-    """
-    This mechanism gets around Numba's restriction of CUDA contexts being thread-local
-    by creating a thread that can select its own device. This allows the user of IPC
-    handles to open them up directly on the same device as the owner (bypassing the
-    need for peer access.)
-    """
-    def __init__(self, ipc):
-
-        Thread.__init__(self)
-
-        self.lock = Lock()
-        self.ipcs = [ipc[0]] # TODO: Should group by device
-        self.device = ipc[1]
-        self.running = False
-
-    def run(self):
-
-        select_device(self.device)
-
-        print("Opening: " + str(self.device) + " " + str(numba.cuda.get_current_device()))
-
-        self.lock.acquire()
-
-        try:
-            self.arrs = [ipc.open() for ipc in self.ipcs]
-
-            self.ptr_info = [x.__cuda_array_interface__ for x in self.arrs]
-            print("IPCS: "+ str(self.ipcs))
-            print("ARRS: "+ str(self.arrs))
-
-            self.running = True
-        except Exception as e:
-            logging.error("Error opening ipc_handle on device " + str(self.device) + ": " + str(e))
-
-        self.lock.release()
-
-        while (self.running):
-            time.sleep(0.01)
-
-        try:
-            logging.warn("Closing: " + str(self.device) + str(numba.cuda.get_current_device()))
-            self.lock.acquire()
-            [ipc.close() for ipc in self.ipcs]
-            self.lock.release()
-        except Exception as e:
-            logging.error("Error closing ipc_handle on device " + str(self.device) + ": " + str(e))
-
-    def close(self):
-
-        """
-        This should be called before calling join(). Otherwise, IPC handles may not be
-        properly cleaned up.
-        """
-        self.lock.acquire()
-        self.running = False
-        self.lock.release()
-
-    def info(self):
-        """
-        Warning: this method is invoked from the calling thread. Make
-        sure the context in the thread reading the memory is tied to
-        self.device, otherwise an expensive peer access might take
-        place underneath.
-        """
-        while (not self.running):
-            time.sleep(0.0001)
-
-        return self.ptr_info
-
-class FITIPCThread(Thread):
-    """
-    This mechanism gets around Numba's restriction of CUDA contexts being thread-local
-    by creating a thread that can select its own device. This allows the user of IPC
-    handles to open them up directly on the same device as the owner (bypassing the
-    need for peer access.)
-    """
-    def __init__(self, ipcs):
-
-        Thread.__init__(self)
-
-        Xy, dev = ipcs
-
-        self.lock = Lock()
-        self.ipcs = [d for d in Xy]
-
-        print("self.ipcs=" + str(self.ipcs))
-
-        self.device = dev
-        self.running = False
-
-    def run(self):
-
-        select_device(self.device)
-
-        print("Opening: " + str(self.device) + " " + str(numba.cuda.get_current_device()))
-
-        self.lock.acquire()
-
-        try:
-            self.arrs = [(X.open(), y.open()) for X,y in self.ipcs]
-
-            print("IPCS: "+ str(self.ipcs))
-            print("ARRS: "+ str(self.arrs))
-            self.ptr_info = [(X.__cuda_array_interface__, y.__cuda_array_interface__) for X,y in self.arrs]
-
-            self.running = True
-        except Exception as e:
-            logging.error("Error opening ipc_handle on device " + str(self.device) + ": " + str(e))
-
-        self.lock.release()
-
-        while (self.running):
-            time.sleep(0.0001)
-
-        try:
-            logging.warn("Closing: " + str(self.device) + str(numba.cuda.get_current_device()))
-            self.lock.acquire()
-            [(X.close(), y.close()) for X,y in self.ipcs]
-            self.lock.release()
-        except Exception as e:
-            logging.error("Error closing ipc_handle on device " + str(self.device) + ": " + str(e))
-
-    def close(self):
-
-        """
-        This should be called before calling join(). Otherwise, IPC handles may not be
-        properly cleaned up.
-        """
-        self.lock.acquire()
-        self.running = False
-        self.lock.release()
-
-    def info(self):
-        """
-        Warning: this method is invoked from the calling thread. Make
-        sure the context in the thread reading the memory is tied to
-        self.device, otherwise an expensive peer access might take
-        place underneath.
-        """
-        while (not self.running):
-            time.sleep(0.0001)
-
-        return self.ptr_info
+    return open_ipcs, devarrs_dev_list, m
 
 
 def build_alloc_info(p): return [p.__cuda_array_interface__]
 
 
-def get_ipc_handles(arr): return arr[0].get_ipc_handle(), arr[1]
+def get_ipc_handles(arr):
+
+
+    return arr[0].get_ipc_handle(), arr[1]
 
 
 def get_input_ipc_handles(arr):
 
-    arrs, dev = arr
     print("input_ipc_handles: " + str(arr))
+
+    arrs, dev = arr
 
     ret = [(X.get_ipc_handle(), y.get_ipc_handle()) for X, y in arrs]
 
@@ -307,7 +199,11 @@ def as_gpu_matrix(arr):
     print("DEVICE: " + str(numba.cuda.get_current_device()))
     return mat, dev
 
+
 def to_gpu_array(arr):
+
+    print("ARR: "+ str(arr))
+
     mat = arr.to_gpu_array()
 
     import os
@@ -329,7 +225,6 @@ def inputs_to_device_arrays(arr):
     mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
 
     # Both X & y should be on the same device at this point (by being on the same worker)
-    import os
     dev = cuml.device_of_ptr(mats[0][0].device_ctypes_pointer.value)
     print("dev_of_ptr: " + str(dev))
     print("DEVICE: " + str(numba.cuda.get_current_device()))
@@ -370,7 +265,8 @@ class LinearRegression(object):
             raise TypeError(msg.format(algorithm))
 
         self.intercept_value = 0.0
-        self.coeffs = []
+        self.coeffs = None;
+
 
     def _get_algorithm_int(self, algorithm):
         return {
@@ -379,12 +275,12 @@ class LinearRegression(object):
         }[algorithm]
 
 
-
     @gen.coroutine
     def _do_fit(self, X_df, y_df):
+
+
         client = default_client()
 
-        print("Co-locating data!")
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X_df.to_delayed()
@@ -405,13 +301,8 @@ class LinearRegression(object):
             if part.status == 'error':
                 yield part  # trigger error locally
 
-
-        print("parts=" + str(parts))
-
         # A dict in the form of { part_key: part }
         key_to_part_dict = dict([(str(part.key), part) for part in parts])
-
-        print("key_to_part_dict=" + str(key_to_part_dict))
 
         who_has = yield client.who_has(parts)
 
@@ -422,9 +313,6 @@ class LinearRegression(object):
                 worker_parts[worker] = []
             worker_parts[worker].append(key_to_part_dict[key])
 
-        # coeffs = [(worker, client.submit(_fit, keys, workers = [worker]))
-        #           for worker, keys in worker_parts.items()]
-
         """
         Create IP Handles on each worker hosting input data 
         """
@@ -433,65 +321,46 @@ class LinearRegression(object):
         input_devarrays = [(worker, client.submit(inputs_to_device_arrays, part, workers=[worker]))
                     for worker, part in worker_parts.items()]
 
-
-        who_has = yield client.who_has()
-
-
         yield wait(input_devarrays)
 
-        print(str(input_devarrays))
-        print(str(who_has))
-
+        print("input_devarrays: " + str(input_devarrays))
 
         """
         Gather IPC handles for each worker and call _fit() on each worker containing data.
         """
-        print("WORKER_PARTS: " + str(worker_parts))
-
         worker_results = {}
         res = []
-        for worker, parts in worker_parts.items():
 
-            print("WORKER: " + str(worker))
+        exec_node = input_devarrays[0][0]
 
-            # Need to fetch coefficient parts on worker
-            on_worker = list(filter(lambda x: x[0] == worker, input_devarrays))
-            not_on_worker = list(filter(lambda x: x[0] != worker, input_devarrays))
+        print("exec_node: "+ str(exec_node))
 
-            print("ON_WORKER: "+ str(list(on_worker)))
-            print("NOT_ON_WORKER: " + str(list(not_on_worker)))
+        # Need to fetch coefficient parts on worker
+        on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
+        not_on_worker = list(filter(lambda x: x[0] != exec_node, input_devarrays))
 
-            ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
-                           for a_worker, future in not_on_worker]
+        ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
+                       for a_worker, future in not_on_worker]
 
-            raw_arrays = [future for a_worker, future in on_worker]
+        raw_arrays = [future for a_worker, future in on_worker]
 
-            # IPC Handles are loaded in separate threads on worker so they can be
-            # used to make calls through cython
-            worker_results[worker] = client.submit(_fit_on_worker,
-                                                    (ipc_handles, raw_arrays), workers=[worker])
+        print("ipc_handles: "+ str(ipc_handles))
+        print("raw_arrays: " + str(raw_arrays))
 
-            res.append(worker_results[worker])
+        # IPC Handles are loaded in separate threads on worker so they can be
+        # used to make calls through cython
+        worker_results[exec_node] = client.submit(_fit_on_worker,
+                                                (ipc_handles, raw_arrays), workers=[exec_node])
+
+        res.append(worker_results[exec_node])
 
         yield wait(res)
-
-        def close_threads(d):
-            ipc_threads, devarrs, result = d
-            [t.close() for t in ipc_threads]
 
         d = [client.submit(close_threads, future) for future in res]
         yield wait(d)
 
-        def join_threads(d):
-            ipc_threads, devarrs, result = d
-            [t.join() for t in ipc_threads]
-
         d = [client.submit(join_threads, future) for future in res]
         yield wait(d)
-
-        def get_result(d):
-            ipc_threads, devarrs, result = d
-            return result
 
         ret = [(worker, client.submit(get_result, futures, workers= [worker]))
                for worker, futures in worker_results.items()]
@@ -508,118 +377,90 @@ class LinearRegression(object):
         """
 
         client = default_client()
-        self.coeffs = client.sync(self._do_fit, X_df, y_df)
+
+        # Coeffs should be a future with a handle on a Dataframe on a single worker.
+        self.coeffs = client.sync(self._do_fit, X_df, y_df)[0]
 
     @gen.coroutine
-    def _do_predict(self, df):
+    def _do_predict(self, dfs):
 
         client = default_client()
 
-        data_parts = df.to_delayed()
+        # Break apart Dask.array/dataframe into chunks/parts
+        data_parts = dfs.to_delayed()
+        if isinstance(data_parts, np.ndarray):
+            assert data_parts.shape[1] == 1
+            data_parts = data_parts.flatten().tolist()
+
+        # Arrange parts into pairs.  This enforces co-locality
         parts = list(map(delayed, data_parts))
         parts = client.compute(parts)  # Start computation in the background
         yield wait(parts)
+
         for part in parts:
             if part.status == 'error':
                 yield part  # trigger error locally
 
-        key_to_part_dict = dict([(str(part.key), part) for part in data_parts])
+        # A dict in the form of { part_key: part }
+        key_to_part_dict = dict([(str(part.key), part) for part in parts])
 
-        """
-        Build map of workers to parts
-        """
-        who_has = yield client.who_has(data_parts)
-        worker_parts = {}
+        who_has = yield client.who_has(parts)
+
+        worker_parts = []
         for key, workers in who_has.items():
             worker = parse_host_port(first(workers))
-            if worker not in worker_parts:
-                worker_parts[worker] = []
-            worker_parts[worker].append(key_to_part_dict[key])
+            worker_parts.append((worker, key_to_part_dict[key]))
 
+
+        print("WORKER PARTS: " + str(worker_parts))
 
         """
         Build Numba devicearrays for all coefficient chunks        
         """
-        coeff_keys = [coeff[1] for coeff in self.coeffs]
 
-        who_has = yield client.who_has(coeff_keys)
+        # Have worker running the coeffs execute the predict logic
+        exec_node, coeff_future = self.coeffs
 
-        print("WHO HAS: " + str(who_has))
-        worker_map = []
-        coeffs_key_to_part_dict = dict([(str(part.key), part) for worker, part in self.coeffs])
+        gpu_data = [(worker, client.submit(as_gpu_matrix, part, workers = [worker])) for worker, part in worker_parts]
 
+        # build ipc handles
+        gpu_data_excl_worker = list(filter(lambda d: d[0] != exec_node, gpu_data))
+        gpu_data_incl_worker = list(filter(lambda d: d[0] == exec_node, gpu_data))
 
-        print(str(coeffs_key_to_part_dict))
+        print("ON WORKER: " + str(len(list(gpu_data_incl_worker))))
+        print("NOT ON WORKER: " + str(len(list(gpu_data_excl_worker))))
 
+        ipc_handles = [client.submit(get_ipc_handles, future, workers=[worker])
+                       for worker, future in gpu_data_excl_worker]
 
-        for key, workers in who_has.items():
-            print(str(key))
-            worker = parse_host_port(first(workers))
-            worker_map.append((worker, coeffs_key_to_part_dict[key]))
+        raw_arrays = [future for worker, future in gpu_data_incl_worker]
 
-        coeff_devarrays = [(worker, client.submit(to_gpu_array, part, workers=[worker]))
-                    for worker, part in worker_map]
+        print("IPCHANDLES = " + str(ipc_handles))
+        print("RAW_ARRAYS=" + str(raw_arrays))
 
-        print(str(coeff_devarrays))
+        f = client.submit(_predict_on_worker, (coeff_future, ipc_handles, raw_arrays), workers=[exec_node])
 
-        """
-        Gather IPC handles and call _predict() on each worker containing data.
-        """
+        yield wait(f)
 
-        print("WORKER_PARTS: " + str(worker_parts))
-
-        worker_results = {}
-        res = []
-        for worker, parts in worker_parts.items():
-
-            # Need to fetch coefficient parts on worker
-            coeffs_on_worker = filter(lambda x: x[0] == worker, coeff_devarrays)
-            coeffs_not_on_worker = filter(lambda x: x[0] != worker, coeff_devarrays)
-
-            ipc_handles = [client.submit(get_ipc_handles, future, workers=[a_worker])
-                           for a_worker, future in coeffs_not_on_worker]
-
-            raw_arrays = [arr[1] for arr in coeffs_on_worker]
-
-            # IPC Handles are loaded in separate threads on worker so they can be
-            # used to make calls through cython
-            worker_results[worker] = (client.submit(_predict_on_worker,
-                                                    (parts, ipc_handles, raw_arrays), workers=[worker]))
-
-            res.append(worker_results[worker])
-
-        yield wait(res)
-
-        print("RES: " + str(res))
+        print("f=" + str(f))
 
         # We can safely close our local threads now that the c++ API is holding onto
         # its own resources.
-        def close_threads(d):
-            ipc_threads, devarrs, result = d
-            [t.close() for t in ipc_threads]
 
-        d = [client.submit(close_threads, future) for future in res]
+        d = client.submit(close_threads, f)
         yield wait(d)
 
-        def join_threads(d):
-            ipc_threads, devarrs, result = d
-            [t.join() for t in ipc_threads]
-
-        d = [client.submit(join_threads, future) for future in res]
+        d = client.submit(join_threads, f)
         yield wait(d)
-
-        def get_result(d):
-            ipc_threads, devarrs, result = d
-            return result
 
         # Turn resulting cudf future into a dask-cudf and return it. For now, returning the futures
         # pointing to the data.
-        ret = [client.submit(get_result, future) for future in res]
+        ret = client.submit(get_result, f)
 
         yield wait(ret)
         return gen.Return(ret)
 
-    def predict(self, df):
+    def predict(self, X):
         """
         Predict values for the multi-gpu linear regression model by making calls to the predict function
         with dask-cudf objects. This gets a little more complicated since we will need to collect the
@@ -633,7 +474,9 @@ class LinearRegression(object):
         :return:
             a dask-cudf containing outputs of the linear regression
         """
-        return default_client().sync(self._do_predict, df)
+
+        client = default_client()
+        return client.sync(self._do_predict, X)
 
     def _build_host_dict(self, gpu_futures, client):
 
@@ -652,4 +495,3 @@ class LinearRegression(object):
 
         workers = [key[0] for key in list(who_has.values())]
         return build_host_dict(workers)
-

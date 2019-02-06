@@ -10,6 +10,7 @@ import time
 
 
 
+
 class IPCThread(Thread):
     """
     This mechanism gets around Numba's restriction of CUDA contexts being thread-local
@@ -23,6 +24,9 @@ class IPCThread(Thread):
         Thread.__init__(self)
 
         self.lock = Lock()
+
+        print("Starting new IPC thread on device %i for ipcs %s" % (device, str(list(ipcs))))
+
         self.ipcs = ipcs
         self.device = device
         self.running = False
@@ -79,6 +83,10 @@ class IPCThread(Thread):
         return self.ptr_info
 
 
+def new_ipc_thread(ipc, dev):
+    t = IPCThread(ipc, dev)
+    t.start()
+    return t
 
 def select_device(dev, close=True):
     if numba.cuda.get_current_device().id != dev:
