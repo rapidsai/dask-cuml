@@ -62,7 +62,7 @@ def _fit(dfs):
         # TODO: Using Series for coeffs throws an error after the 2nd or third training of a model
         # The error is related to the bitmask or pickle serialization. Very strange,
         # considering there shouldn't be any pickling in this line.
-        ret = cudf.DataFrame([('a', np.array([1, 2, 3, 4]))])
+        ret = cudf.Series([1, 2, 3, 4])
         return ret
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
@@ -93,7 +93,7 @@ def _predict(X_dfs, coeff_ptrs):
 
     print("Called _predict()")
 
-    return cudf.DataFrame([('a', [1, 2, 3, 4, 5])])
+    return cudf.Series([1, 2, 3, 4, 5])
 
 def _predict_on_worker(data):
     coeffs, ipcs, devarrs = data
