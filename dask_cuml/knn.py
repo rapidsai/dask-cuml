@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-from .core import parse_host_port, IPCThread, build_host_dict, select_device
+from .core import *
 
-from cuml import MGKNN as cumlMGKNN
+from cuml import KNN as cumlKNN
 import logging
 
 import random
+
+import itertools
+
 
 from tornado import gen
 import dask_cudf, cudf
@@ -42,16 +45,11 @@ import numba.cuda
 
 def to_gpu_matrix(inp):
     dev, df = inp
-    select_device(dev)
 
     try:
         gpu_matrix = df.as_gpu_matrix(order='F')
-        shape = df.shape[1]
-        dtype = gpu_matrix.dtype
-        z = np.zeros(shape, dtype=dtype)
-        series = cudf.Series(z)
-        gpu_array = series._column._data.to_gpu_array()
-        return (dev, gpu_matrix, series, gpu_array)
+        return dev, gpu_matrix
+
     except Exception as e:
         import traceback
         logging.error("Error in to_gpu_matrix(dev=" + str(dev) + "): " + str(e))
@@ -60,21 +58,16 @@ def to_gpu_matrix(inp):
 
 
 def build_alloc_info(data):
-    dev, gpu_matrix, series, gpu_array = data
-    return [gpu_matrix.__cuda_array_interface__, gpu_array.__cuda_array_interface__]
+    dev, gpu_matrix = data
+    return gpu_matrix.__cuda_array_interface__
 
 
-def get_ipc_handles(data):
-    dev, gpu_matrix, series, gpu_array = data
+def get_ipc_handle(data):
+    dev, gpu_matrix = data
 
-    select_device(dev)
     try:
-        logging.warn("Building in_handle on " + str(dev))
         in_handle = gpu_matrix.get_ipc_handle()
-
-        logging.warn("Building out_handle on " + str(dev))
-        out_handle = gpu_array.get_ipc_handle()
-        return (dev, in_handle, out_handle)
+        return dev, in_handle
     except Exception as e:
         import traceback
         logging.error("Error in get_ipc_handles(dev=" + str(dev) + "): " + str(e))
@@ -82,49 +75,53 @@ def get_ipc_handles(data):
         pass
 
 
-def to_pandas(data):
-    dev, gpu_matrix, series, gpu_array = data
-    return series.to_pandas()
+def extract_model(data):
+    ipcs, rawarrs, m = data
+    return m
 
 
 # Run on a single worker on each unique host
-def _fit(data):
+def _fit(data, params):
     ipcs, raw_arrs = data
 
-    # Get device from local gpu_futures (should be the same)
-    select_device(raw_arrs[0][0])
-
-    def new_ipc_thread(dev, ipcs):
-        t = IPCThread(ipcs, dev)
-        t.start()
-        return t
-
     # Separate threads to hold pointers to separate devices
-    open_ipcs = [new_ipc_thread(dev, [inp, outp]) for dev, inp, outp in ipcs]
+    # The order in which we pass the list of IPCs to the thread matters and the goal is
+    # to maximize reuse while minimizing the number of threads. We want to limit the
+    # number of threads to O(len(devices)) and want to avoid having if be O(len(ipcs))
+    # at all costs!
+    device_handle_map = defaultdict(list)
+    [device_handle_map[dev].append(ipc) for dev, ipc in ipcs]
 
-    m = cumlMGKNN()
+    open_ipcs = [new_ipc_thread(ipcs, dev) for dev, ipcs in device_handle_map.items()]
 
-    alloc_info = [t.info() for t in open_ipcs]
+    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
     alloc_info.extend([build_alloc_info(t) for t in raw_arrs])
 
-    logging.debug("calc_mean_device: " + str(numba.cuda.get_current_device()))
-    m.calculate(alloc_info)
+    m = cumlKNN()
+    m.fit_mg(params["D"], alloc_info)
 
-    logging.debug("end calc_mean_device: " + str(numba.cuda.get_current_device()))
-    return open_ipcs, raw_arrs
-
+    return open_ipcs, raw_arrs, m
 
 
-class MGKNN(object):
+def _kneighbors(X, m, all_ranks, params):
+    return m.query_mn(X, params["k"], all_ranks)
+
+
+class KNN(object):
     """
     Data-parallel Multi-Node Multi-GPU kNN Model.
 
-    Data is spread across Dask workers. On each node, a single worker creates a series of indices, one for each
-    chunk of the Dask input. Each unique hostname is assigned a monotonically increasing identifier, which is
-    used is added to the resulting indices so that queries can be reconstructed properly.
+    Data is spread across Dask workers using Dask cuDF. On each unique host, a single worker is chosen to creates
+    a series of kNN indices, one for each chunk of the Dask input, across devices on that host. Each unique hostname
+    is assigned a monotonically increasing identifier, which is used as a multiplier for the resulting kNN indices
+    across hosts so that the global index matrix, returned from queries, will reflect the global order.
     """
 
-    def fit(self, futures):
+    def __init__(self):
+        self.sub_models = []
+        self.host_masters = []
+
+    def fit(self, ddf):
         """
         Fits a multi-node multi-gpu knn model, each node using their own index structure underneath.
         :param futures:
@@ -134,67 +131,93 @@ class MGKNN(object):
 
         # Keep the futures around so the GPU memory doesn't get
         # deallocated on the workers.
-        gpu_futures = client.sync(self._get_mg_info, futures)
+        gpu_futures, cols = client.sync(self._get_mg_info, ddf)
+
+        # Choose a random worker on each unique host to run cuml's kNN.fit() function
+        # on all the cuDFs living on that host
+        master_hosts = [(host, random.sample(ports, 1)[0])
+                        for host, ports in self._build_host_dict(gpu_futures, client).items()]
+
+        self.host_masters = [(worker, client.submit(get_ranks, ident, workers=[worker]).result())
+                             for worker, ident in zip(master_hosts, range(len(master_hosts)))]
 
         f = []
-        for host, ports in self._build_host_dict(gpu_futures, client).items():
+        for host, port in master_hosts:
 
-            # Choose a random worker on each node to become the
-            # execution node.
-            exec_node = (host, random.sample(ports, 1)[0])
+            gpu_futures_for_host = filter(lambda d: d[0][0] == host, gpu_futures)
+
+            exec_node = (host, port)
 
             # build ipc handles
-            gpu_data_excl_worker = filter(lambda d: d[0] != exec_node, gpu_futures)
-            gpu_data_incl_worker = filter(lambda d: d[0] == exec_node, gpu_futures)
+            gpu_data_excl_worker = filter(lambda d: d[0] != exec_node, gpu_futures_for_host)
+            gpu_data_incl_worker = filter(lambda d: d[0] == exec_node, gpu_futures_for_host)
 
-            ipc_handles = [client.submit(get_ipc_handles, future, workers=[worker])
+            ipc_handles = [client.submit(get_ipc_handle, future, workers=[worker])
                            for worker, future in gpu_data_excl_worker]
 
             raw_arrays = [future for worker, future in gpu_data_incl_worker]
-
-            f.append(client.submit(_fit, (ipc_handles, raw_arrays), workers=[exec_node]))
+            f.append((exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
+                                   {"D": cols, "ranks": self.host_masters},
+                                   workers=[exec_node])))
 
         wait(f)
+
+        self.terminate_ipcs(client, f)
+
+        # The model on each unique host is held for futures queries
+        self.sub_models = dict([(worker, client.submit(extract_model, future, workers = [worker])
+                           for worker, future in f)])
+
+    @staticmethod
+    def terminate_ipcs(client, f):
 
         # We can safely close our local threads now that the c++ API is holding onto
         # its own resources.
 
         def close_threads(d):
-            ipc_threads, rawarrays = d
+            ipc_threads, rawarrays, m = d
             [t.close() for t in ipc_threads]
 
-        d = [client.submit(close_threads, future) for future in f]
+        d = [client.submit(close_threads, future) for worker, future in f]
         wait(d)
 
         def join_threads(d):
-            ipc_threads, rawarrays = d
+            ipc_threads, rawarrays, m = d
             [t.join() for t in ipc_threads]
 
-        d = [client.submit(join_threads, future) for future in f]
+        d = [client.submit(join_threads, future) for worker, future in f]
 
         wait(d)
 
-        # The model on each node is encapsulated within this model.
-        self.sub_models = f
-
-    def kneighbors(self, input):
+    def kneighbors(self, X, k):
         """
-        Queries the multi-node multi-gpu knn model by propagating the query to each unique host.
+        Queries the multi-node multi-gpu knn model by propagating the query cudf to each unique host.
+        Eventually, this will support dask_cudf inputs but for now it supports a single cudf.
+
+        1. Push X to the master worker on each unique host (cloudpickle serializer should
+           allow X to be smart for minimizing copies as much as possible)
+        2. Run the kNN query on each master worker
 
         :param input:
+            A cudf to distribute across the workers to run the kNN in parallel.
+            NOTE: This is a single cudf for the first iteration and will become a
+            dask_cudf in future iterations.
+        :param k:
+            The number of nearest neighbors to query for each input vector.
         :return:
             dists and indices of the k-nearest neighbors to the input vectors
         """
 
-        # Retrieve k neighbors from 1 worker on each node and have 1 rank fetch results.
+        client = default_client()
 
+        X_replicated = dict([(worker, client.scatter(X, workers=[worker])
+                            for worker, rank in self.host_masters)])
 
-        # Need to wrap the MNMG call for each of the self.sub_models to search.
+        results = [(worker, client.submit(_kneighbors, X_part, self.sub_models[worker], workers=[worker]))
+                   for worker, X_part in X_replicated.items()]
 
-        #
-
-
-        pass
+        # first rank listed in host_masters provides the actual output
+        return list(filter(lambda x: x[0] == self.host_masters[0][0], results))[0]
 
     def get(self, indices):
         """
@@ -204,7 +227,8 @@ class MGKNN(object):
         """
         pass
 
-    def _build_host_dict(self, gpu_futures, client):
+    @staticmethod
+    def _build_host_dict(gpu_futures, client):
 
         who_has = client.who_has(gpu_futures)
 
@@ -222,14 +246,14 @@ class MGKNN(object):
         workers = [key[0] for key in list(who_has.values())]
         return build_host_dict(workers)
 
-
     @gen.coroutine
-    def _get_mg_info(self, futures):
+    def _get_mg_info(self, ddf):
 
         client = default_client()
 
-        if isinstance(futures, dd.DataFrame):
-            data_parts = futures.to_delayed()
+        if isinstance(ddf, dd.DataFrame):
+            cols = len(ddf.columns)
+            data_parts = ddf.to_delayed()
             parts = list(map(delayed, data_parts))
             parts = client.compute(parts)  # Start computation in the background
             yield wait(parts)
@@ -237,7 +261,7 @@ class MGKNN(object):
                 if part.status == 'error':
                     yield part  # trigger error locally
         else:
-            data_parts = futures
+            raise Exception("Input should be a Dask DataFrame")
 
         key_to_part_dict = dict([(str(part.key), part) for part in data_parts])
 
@@ -252,4 +276,4 @@ class MGKNN(object):
 
         yield wait(gpu_data)
 
-        raise gen.Return(gpu_data)
+        raise gen.Return(gpu_data, cols)

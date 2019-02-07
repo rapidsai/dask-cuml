@@ -58,6 +58,8 @@ def _fit(dfs):
 
     print("CURRENT DEVICE: " + str(numba.cuda.get_current_device().id))
 
+    print("DFS in FIT: " + str(dfs))
+
     try:
         # TODO: Using Series for coeffs throws an error after the 2nd or third training of a model
         # The error is related to the bitmask or pickle serialization. Very strange,
@@ -123,9 +125,11 @@ def _predict_on_worker(data):
     except Exception as e:
         print("Failure: " + str(e))
 
+
 def close_threads(d):
     ipc_threads, devarrs, result = d
     [t.close() for t in ipc_threads]
+
 
 def join_threads(d):
     ipc_threads, devarrs, result = d
@@ -139,12 +143,12 @@ def get_result(d):
     ipc_threads, devarrs, result = d
     return result
 
-def group(lst, n):
-  for i in range(0, len(lst), n):
-    val = lst[i:i+n]
-    if len(val) == n:
-      yield tuple(val)
 
+def group(lst, n):
+    for i in range(0, len(lst), n):
+        val = lst[i:i+n]
+        if len(val) == n:
+            yield tuple(val)
 
 
 def _fit_on_worker(data):
