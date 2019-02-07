@@ -108,11 +108,8 @@ def _predict_on_worker(data, params):
     print("PREDICT IPCS: "+ str(ipcs))
     print("PREDICT DEVARRS: " + str(devarrs))
 
-    dev_ipcs = {}
-    for p, dev in ipcs:
-        if dev not in dev_ipcs:
-            dev_ipcs[dev] = []
-        dev_ipcs[dev].append(p)
+    dev_ipcs = defaultdict(list)
+    [dev_ipcs[dev].append(p) for p, dev in ipcs]
 
     open_ipcs = [new_ipc_thread(p, dev) for dev, p in dev_ipcs.items()]
 
@@ -244,7 +241,9 @@ def inputs_to_device_arrays(arr):
     return mats, dev
 
 
-def extract_part(data, part): return data[part]
+def extract_part(data, part):
+    print("DATA: "+ str(data))
+    return data[part]
 
 
 class LinearRegression(object):
@@ -380,9 +379,13 @@ class LinearRegression(object):
 
         # We can assume a single coeff array and intercept for now.
         worker, p = ret
-        coeffs = client.submit(extract_part, p, 0, workers = [worker])
-        intercept = client.submit(extract_part, p, 1, workers = [workers])
-        raise gen.Return(coeffs, intercept)
+        coeffs = (worker, client.submit(extract_part, p, 0, workers = [worker]))
+        intercept = client.submit(extract_part, p, 1, workers = [worker])
+
+        print("COEFS: "+ str(coeffs))
+        print("INTER: "+ str(intercept))
+
+        raise gen.Return((coeffs, intercept))
 
     def fit(self, X_df, y_df):
         """
@@ -396,10 +399,12 @@ class LinearRegression(object):
 
         # Coeffs should be a future with a handle on a Dataframe on a single worker.
         # Intercept should be a future with a handle on a float on a single worker.
-        coeffs, intercept = client.sync(self._do_fit, X_df, y_df)[0]
+        coeffs, intercepts = client.sync(self._do_fit, X_df, y_df)
+
+        print("RES: "+ str(intercepts))
 
         self.coef_ = coeffs
-        self.intercept_ = intercept
+        self.intercept_ = intercepts
 
     @gen.coroutine
     def _do_predict(self, dfs):
@@ -438,7 +443,7 @@ class LinearRegression(object):
         """
 
         # Have worker running the coeffs execute the predict logic
-        exec_node, coeff_future = self.coeffs
+        exec_node, coeff_future = self.coef_
 
         gpu_data = [(worker, client.submit(as_gpu_matrix, part, workers = [worker]))
                     for worker, part in worker_parts]
@@ -459,7 +464,7 @@ class LinearRegression(object):
         print("RAW_ARRAYS=" + str(raw_arrays))
 
         f = client.submit(_predict_on_worker,
-                          (coeff_future, ipc_handles, raw_arrays),
+                          (coeff_future, self.intercept_, ipc_handles, raw_arrays),
                           self._build_params_map(),
                           workers=[exec_node])
 
@@ -498,7 +503,7 @@ class LinearRegression(object):
         """
 
         client = default_client()
-        return client.sync(self._do_predict, X)
+        return client.sync(self._do_predict, X).value
 
     def _build_host_dict(self, gpu_futures, client):
 
