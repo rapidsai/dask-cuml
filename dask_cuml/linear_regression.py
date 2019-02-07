@@ -46,14 +46,18 @@ import dask.array as da
 
 import numpy as np
 
-def _fit(dfs):
+def _fit(dfs, params):
     """
     This performs the actual MG fit logic. It should
         1. Create an empty numba array to hold the resulting coefficients
         2. Make call to cython function with list of cudfs
         3. Return resulting coefficients.
-    :param [(X_cudf, y_cudf)]:
-        list of tuples of __cuda_device_array__ dicts for X & y values
+    :param [(X.__cuda_array_interface__, y.__cuda_array_interface__)]:
+        list of tuples of __cuda_array_interface__ dicts for X & y values
+    :param params
+        dict containing input parameters (fit_intercept,normalize,algo)
+    :returns
+        The resulting coef_ and intercept_ values (in that order)
     """
 
     print("CURRENT DEVICE: " + str(numba.cuda.get_current_device().id))
@@ -64,13 +68,13 @@ def _fit(dfs):
         # TODO: Using Series for coeffs throws an error after the 2nd or third training of a model
         # The error is related to the bitmask or pickle serialization. Very strange,
         # considering there shouldn't be any pickling in this line.
-        ret = cudf.Series([1, 2, 3, 4])
+        ret = (cudf.Series([1, 2, 3, 4]), 5)
         return ret
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
 
 
-def _predict(X_dfs, coeff_ptrs):
+def _predict(X_dfs, coeff_ptr, intercept, params):
     """
     This performs the actual MG predict logic. It should
         1. Create an empty cudf to hold the resulting predictions
@@ -87,7 +91,7 @@ def _predict(X_dfs, coeff_ptrs):
 
     :param X_df:
         cudf object to predict
-    :param coeff_ptrs
+    :param coeff_ptr
         a list of dicts following the __cuda_aray_interface__ format
     :return:
         cudf containing predictions
@@ -97,8 +101,9 @@ def _predict(X_dfs, coeff_ptrs):
 
     return cudf.Series([1, 2, 3, 4, 5])
 
-def _predict_on_worker(data):
-    coeffs, ipcs, devarrs = data
+
+def _predict_on_worker(data, params):
+    coeffs, intercept, ipcs, devarrs = data
 
     print("PREDICT IPCS: "+ str(ipcs))
     print("PREDICT DEVARRS: " + str(devarrs))
@@ -116,7 +121,7 @@ def _predict_on_worker(data):
 
     try:
         # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
-        m = _predict(coeffs, alloc_info)
+        m = _predict(alloc_info, coeffs, intercept, params)
 
         print("Returned from PREDICT")
 
@@ -151,7 +156,7 @@ def group(lst, n):
             yield tuple(val)
 
 
-def _fit_on_worker(data):
+def _fit_on_worker(data, params):
 
     ipc_dev_list, devarrs_dev_list = data
 
@@ -169,7 +174,7 @@ def _fit_on_worker(data):
              for p, dev in devarrs_dev_list])))
 
     # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
-    m = _fit(alloc_info)
+    m = _fit(alloc_info, params)
 
     return open_ipcs, devarrs_dev_list, m
 
@@ -239,6 +244,9 @@ def inputs_to_device_arrays(arr):
     return mats, dev
 
 
+def extract_part(data, part): return data[part]
+
+
 class LinearRegression(object):
     """
     Model-Parallel Multi-GPU Linear Regression Model.
@@ -268,23 +276,21 @@ class LinearRegression(object):
             msg = "algorithm {!r} is not supported"
             raise TypeError(msg.format(algorithm))
 
-        self.intercept_value = 0.0
-        self.coeffs = None;
-
-
-    def _get_algorithm_int(self, algorithm):
+    @staticmethod
+    def _get_algorithm_int(algorithm):
         return {
             'svd': 0,
             'eig': 1
         }[algorithm]
 
+    def _build_params_map(self):
+        return {"fit_intercept": self.fit_intercept, "normalize":self.normalize, "algo": self.algo}
 
     @gen.coroutine
     def _do_fit(self, X_df, y_df):
 
 
         client = default_client()
-
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X_df.to_delayed()
@@ -353,8 +359,9 @@ class LinearRegression(object):
 
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
-        worker_results[exec_node] = client.submit(_fit_on_worker,
-                                                (ipc_handles, raw_arrays), workers=[exec_node])
+
+        worker_results[exec_node] = client.submit(_fit_on_worker, (ipc_handles, raw_arrays),
+                                                  self._build_params_map(), workers=[exec_node])
 
         res.append(worker_results[exec_node])
 
@@ -367,10 +374,15 @@ class LinearRegression(object):
         yield wait(d)
 
         ret = [(worker, client.submit(get_result, futures, workers= [worker]))
-               for worker, futures in worker_results.items()]
+               for worker, futures in worker_results.items()][0]
 
         yield wait(ret)
-        raise gen.Return(ret)
+
+        # We can assume a single coeff array and intercept for now.
+        worker, p = ret
+        coeffs = client.submit(extract_part, p, 0, workers = [worker])
+        intercept = client.submit(extract_part, p, 1, workers = [workers])
+        raise gen.Return(coeffs, intercept)
 
     def fit(self, X_df, y_df):
         """
@@ -383,7 +395,11 @@ class LinearRegression(object):
         client = default_client()
 
         # Coeffs should be a future with a handle on a Dataframe on a single worker.
-        self.coeffs = client.sync(self._do_fit, X_df, y_df)[0]
+        # Intercept should be a future with a handle on a float on a single worker.
+        coeffs, intercept = client.sync(self._do_fit, X_df, y_df)[0]
+
+        self.coef_ = coeffs
+        self.intercept_ = intercept
 
     @gen.coroutine
     def _do_predict(self, dfs):
@@ -415,7 +431,6 @@ class LinearRegression(object):
             worker = parse_host_port(first(workers))
             worker_parts.append((worker, key_to_part_dict[key]))
 
-
         print("WORKER PARTS: " + str(worker_parts))
 
         """
@@ -425,7 +440,8 @@ class LinearRegression(object):
         # Have worker running the coeffs execute the predict logic
         exec_node, coeff_future = self.coeffs
 
-        gpu_data = [(worker, client.submit(as_gpu_matrix, part, workers = [worker])) for worker, part in worker_parts]
+        gpu_data = [(worker, client.submit(as_gpu_matrix, part, workers = [worker]))
+                    for worker, part in worker_parts]
 
         # build ipc handles
         gpu_data_excl_worker = list(filter(lambda d: d[0] != exec_node, gpu_data))
@@ -442,7 +458,10 @@ class LinearRegression(object):
         print("IPCHANDLES = " + str(ipc_handles))
         print("RAW_ARRAYS=" + str(raw_arrays))
 
-        f = client.submit(_predict_on_worker, (coeff_future, ipc_handles, raw_arrays), workers=[exec_node])
+        f = client.submit(_predict_on_worker,
+                          (coeff_future, ipc_handles, raw_arrays),
+                          self._build_params_map(),
+                          workers=[exec_node])
 
         yield wait(f)
 
@@ -450,7 +469,6 @@ class LinearRegression(object):
 
         # We can safely close our local threads now that the c++ API is holding onto
         # its own resources.
-
         d = client.submit(close_threads, f)
         yield wait(d)
 
