@@ -16,7 +16,7 @@ import pandas.testing
 from dask_cuml import linear_regression as cumlLR
 from dask_cuml import core
 
-def test_answer():
+def test_end_to_end():
 
     cluster = LocalCUDACluster(threads_per_worker=10)
     client = Client(cluster)

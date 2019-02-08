@@ -1,0 +1,5 @@
+Building UCX with:
+./configure --prefix=/usr --enable-mt --with-cuda=/usr/local/cuda --with-gdrcopy=/usr
+make -j install
+
+
