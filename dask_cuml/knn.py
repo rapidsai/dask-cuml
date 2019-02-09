@@ -116,6 +116,10 @@ def _fit(data, params):
 
 def _kneighbors(X, m, all_ranks, params):
     from mpi4py import MPI
+
+    print("params: "+ str(params))
+    print("all_ranks: "  + str(all_ranks))
+
     return m.query_mn(X, params["k"], all_ranks)
 
 
