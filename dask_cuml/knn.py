@@ -29,6 +29,7 @@ import dask_cudf, cudf
 
 import logging
 
+import os
 import time
 
 from dask.distributed import get_worker, get_client, Client
@@ -51,7 +52,7 @@ def to_gpu_matrix(df):
         gpu_matrix = df.as_gpu_matrix(order='F')
 
         dev = device_of_ptr(gpu_matrix)
-        return dev, gpu_matrix
+        return os.environ["CUDA_VISIBLE_DEVICES"].split()[dev], gpu_matrix
 
     except Exception as e:
         import traceback
@@ -108,7 +109,7 @@ def _fit(data, params):
 
     print("alloc_info=" + str(alloc_info))
 
-    m = cumlKNN()
+    m = cumlKNN(should_downcast = params["should_downcast"])
     m.fit_mg(params["D"], alloc_info)
 
     return open_ipcs, raw_arrs, m
@@ -133,9 +134,10 @@ class KNN(object):
     across hosts so that the global index matrix, returned from queries, will reflect the global order.
     """
 
-    def __init__(self):
+    def __init__(self, should_downcast = False):
         self.sub_models = []
         self.host_masters = []
+        self.should_downcast = should_downcast
 
     def fit(self, ddf):
         """
@@ -187,7 +189,7 @@ class KNN(object):
             print("raw_arrays=" + str(raw_arrays))
 
             f.append((exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
-                                   {"D": cols, "ranks": self.host_masters},
+                                   {"D": cols, "ranks": self.host_masters, "should_downcast":self.should_downcast},
                                    workers=[exec_node])))
 
         wait(f)
@@ -245,7 +247,8 @@ class KNN(object):
 
         ranks = [r for h, r in self.host_masters]
 
-        results = [(worker, client.submit(_kneighbors, X_part, self.sub_models[worker], ranks, {"k": k},workers=[worker]))
+        results = [(worker, client.submit(_kneighbors, X_part, self.sub_models[worker], ranks,
+                                          {"k": k},workers=[worker]))
                    for worker, X_part in X_replicated.items()]
 
         # first rank listed in host_masters provides the actual output

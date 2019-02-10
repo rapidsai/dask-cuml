@@ -46,6 +46,9 @@ import dask.array as da
 
 import numpy as np
 
+import os
+
+
 def _fit(dfs, params):
     """
     This performs the actual MG fit logic. It should
@@ -198,12 +201,12 @@ def get_input_ipc_handles(arr):
 
 def as_gpu_matrix(arr):
     mat = arr.as_gpu_matrix(order="F")
+    dev = cuml.device_of_ptr(mat)
 
-    import os
-    dev = cuml.device_of_ptr(mat.device_ctypes_pointer.value)
-    print("dev_of_ptr: " + str(dev))
-    print("DEVICE: " + str(numba.cuda.get_current_device()))
-    return mat, dev
+    # We want to select the actual device by label since the CUDA
+    # API treats all devices relative to their placement in the
+    # CUDA_VISIBLE_DEVICES.
+    return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
 
 
 def to_gpu_array(arr):
@@ -212,11 +215,8 @@ def to_gpu_array(arr):
 
     mat = arr.to_gpu_array()
 
-    import os
-    dev = cuml.device_of_ptr(mat.device_ctypes_pointer.value)
-    print("dev_of_ptr: " + str(dev))
-    print("DEVICE: " + str(numba.cuda.get_current_device()))
-    return mat, dev
+    dev = cuml.device_of_ptr(mat)
+    return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
 
 
 def inputs_to_device_arrays(arr):
