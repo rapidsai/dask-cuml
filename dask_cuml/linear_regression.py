@@ -203,9 +203,7 @@ def as_gpu_matrix(arr):
     mat = arr.as_gpu_matrix(order="F")
     dev = cuml.device_of_ptr(mat)
 
-    # We want to select the actual device by label since the CUDA
-    # API treats all devices relative to their placement in the
-    # CUDA_VISIBLE_DEVICES.
+    # Return canonical device id as string
     return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
 
 
@@ -216,6 +214,8 @@ def to_gpu_array(arr):
     mat = arr.to_gpu_array()
 
     dev = cuml.device_of_ptr(mat)
+
+    # Return canonical device id as string
     return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
 
 
@@ -231,14 +231,15 @@ def inputs_to_device_arrays(arr):
     mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
 
     # Both X & y should be on the same device at this point (by being on the same worker)
-    dev = cuml.device_of_ptr(mats[0][0].device_ctypes_pointer.value)
+    dev = cuml.device_of_ptr(mats[0][0])
     print("dev_of_ptr: " + str(dev))
     print("DEVICE: " + str(numba.cuda.get_current_device()))
 
     print("MATS: " + str(mats))
     print("dev=" + str(dev))
 
-    return mats, dev
+    # Return canonical device id as string
+    return mats, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
 
 
 def extract_part(data, part):

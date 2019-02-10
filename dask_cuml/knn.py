@@ -52,6 +52,8 @@ def to_gpu_matrix(df):
         gpu_matrix = df.as_gpu_matrix(order='F')
 
         dev = device_of_ptr(gpu_matrix)
+
+        # Return canonical device id as string
         return os.environ["CUDA_VISIBLE_DEVICES"].split()[dev], gpu_matrix
 
     except Exception as e:

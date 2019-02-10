@@ -8,8 +8,17 @@ import random
 from threading import Lock, Thread
 import time
 
+import os
 
 
+def get_device_id(canonical_name):
+    dev_order = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+    idx = 0
+    for dev in dev_order:
+        if dev == canonical_name:
+            return idx
+        idx+=1
+    return -1
 
 class IPCThread(Thread):
     """
@@ -28,7 +37,9 @@ class IPCThread(Thread):
         print("Starting new IPC thread on device %i for ipcs %s" % (device, str(list(ipcs))))
 
         self.ipcs = ipcs
-        self.device = device
+
+        # Use canonical device id
+        self.device = get_device_id(device)
         self.running = False
 
     def run(self):
