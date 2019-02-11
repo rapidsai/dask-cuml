@@ -46,15 +46,13 @@ from toolz import first, assoc
 
 import numba.cuda
 
+
 def to_gpu_matrix(df):
 
     try:
         gpu_matrix = df.as_gpu_matrix(order='F')
-
-        dev = device_of_ptr(gpu_matrix)
-
-        # Return canonical device id as string
-        return os.environ["CUDA_VISIBLE_DEVICES"].split()[dev], gpu_matrix
+        dev = device_of_devicendarray(gpu_matrix)
+        return dev, gpu_matrix
 
     except Exception as e:
         import traceback
@@ -78,12 +76,6 @@ def get_ipc_handle(data):
         logging.error("Error in get_ipc_handles(dev=" + str(dev) + "): " + str(e))
         traceback.print_exc()
         pass
-
-
-def extract_model(data):
-    ipcs, rawarrs, m = data
-    return m
-
 
 # Run on a single worker on each unique host
 def _fit(data, params):
@@ -114,7 +106,12 @@ def _fit(data, params):
     m = cumlKNN(should_downcast = params["should_downcast"])
     m.fit_mg(params["D"], alloc_info)
 
-    return open_ipcs, raw_arrs, m
+    print("Done running fit_mg()")
+
+    [t.close() for t in open_ipcs]
+    [t.join() for t in open_ipcs]
+
+    return m
 
 
 def _kneighbors(X, m, all_ranks, params):
@@ -165,10 +162,7 @@ class KNN(object):
         self.host_masters = [(worker, client.submit(get_ranks, ident, workers=[worker]).result())
                              for worker, ident in zip(master_hosts, range(len(master_hosts)))]
 
-
-
         print("HOST MASTERS: " + str(self.host_masters))
-
 
         f = []
         for host, port in master_hosts:
@@ -196,32 +190,16 @@ class KNN(object):
 
         wait(f)
 
-        self.terminate_ipcs(client, f)
+        print("WHO HAS: "+ str(client.who_has()))
+
+        print("Terminating IPCs")
+
+        # self.terminate_ipcs(client, f)
+
+        print("Setting submodels")
 
         # The model on each unique host is held for futures queries
-        self.sub_models = dict([(worker, client.submit(extract_model, future, workers = [worker]))
-                                for worker, future in f])
-
-    @staticmethod
-    def terminate_ipcs(client, f):
-
-        # We can safely close our local threads now that the c++ API is holding onto
-        # its own resources.
-
-        def close_threads(d):
-            ipc_threads, rawarrays, m = d
-            [t.close() for t in ipc_threads]
-
-        d = [client.submit(close_threads, future) for worker, future in f]
-        wait(d)
-
-        def join_threads(d):
-            ipc_threads, rawarrays, m = d
-            [t.join() for t in ipc_threads]
-
-        d = [client.submit(join_threads, future) for worker, future in f]
-
-        wait(d)
+        self.sub_models = dict(f)
 
     def kneighbors(self, X, k):
         """
