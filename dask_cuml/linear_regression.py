@@ -201,10 +201,10 @@ def get_input_ipc_handles(arr):
 
 def as_gpu_matrix(arr):
     mat = arr.as_gpu_matrix(order="F")
-    dev = cuml.device_of_ptr(mat)
+    dev = device_of_devicendarray(mat)
 
     # Return canonical device id as string
-    return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
+    return mat, dev
 
 
 def to_gpu_array(arr):
@@ -213,10 +213,10 @@ def to_gpu_array(arr):
 
     mat = arr.to_gpu_array()
 
-    dev = cuml.device_of_ptr(mat)
+    dev = device_of_devicendarray(mat)
 
     # Return canonical device id as string
-    return mat, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
+    return mat, dev
 
 
 def inputs_to_device_arrays(arr):
@@ -230,8 +230,11 @@ def inputs_to_device_arrays(arr):
 
     mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
 
+    print("MATS: "+ str(mats))
+
     # Both X & y should be on the same device at this point (by being on the same worker)
-    dev = cuml.device_of_ptr(mats[0][0])
+    dev = device_of_devicendarray(mats[0][0])
+
     print("dev_of_ptr: " + str(dev))
     print("DEVICE: " + str(numba.cuda.get_current_device()))
 
@@ -239,7 +242,7 @@ def inputs_to_device_arrays(arr):
     print("dev=" + str(dev))
 
     # Return canonical device id as string
-    return mats, os.environ["CUDA_VISIBLE_DEVICES"].split()[dev]
+    return mats, dev
 
 
 def extract_part(data, part):

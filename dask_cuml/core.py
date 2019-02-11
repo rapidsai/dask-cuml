@@ -1,6 +1,8 @@
 
 from dask.distributed import wait, default_client
 
+import cuml
+
 import logging
 import numba.cuda
 import random
@@ -11,13 +13,25 @@ import time
 import os
 
 
+def get_visible_devices():
+
+    # TODO: Shouldn't have to split on every call
+    return os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+
+
+def device_of_devicendarray(devicendarray):
+    dev = cuml.device_of_ptr(devicendarray)
+    return get_visible_devices()[dev]
+
+
 def get_device_id(canonical_name):
-    dev_order = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+    dev_order = get_visible_devices()
     idx = 0
     for dev in dev_order:
         if dev == canonical_name:
             return idx
         idx+=1
+
     return -1
 
 class IPCThread(Thread):
@@ -34,12 +48,12 @@ class IPCThread(Thread):
 
         self.lock = Lock()
 
-        print("Starting new IPC thread on device %i for ipcs %s" % (device, str(list(ipcs))))
-
         self.ipcs = ipcs
 
         # Use canonical device id
         self.device = get_device_id(device)
+
+        print("Starting new IPC thread on device %i for ipcs %s" % (self.device, str(list(ipcs))))
         self.running = False
 
     def run(self):
