@@ -16,6 +16,7 @@ import pandas.testing
 from dask_cuml import knn as cumlKNN
 from dask_cuml import core
 
+
 def test_end_to_end():
 
     cluster = LocalCUDACluster(threads_per_worker=10)
@@ -29,14 +30,15 @@ def test_end_to_end():
     lr = cumlKNN.KNN()
     lr.fit(X_df)
 
-    print(str(lr.host_masters))
+    worker, f = lr.kneighbors(X, 1)
 
-    g = lr.kneighbors(X, 2)
+    D, I = f.result()
 
+    print(str(D))
 
+    print(str(I))
 
-    print("OUTPUT: " + str(g[1].result()))
+    assert(0==1)
 
-    assert(1==0)
 
     cluster.close()
