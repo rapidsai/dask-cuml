@@ -99,17 +99,11 @@ def _predict(X_dfs, coeff_ptr, intercept, params):
     :return:
         cudf containing predictions
     """
-
-    print("Called _predict()")
-
     return cudf.Series([1, 2, 3, 4, 5])
 
 
 def _predict_on_worker(data, params):
     coeffs, intercept, ipcs, devarrs = data
-
-    print("PREDICT IPCS: "+ str(ipcs))
-    print("PREDICT DEVARRS: " + str(devarrs))
 
     dev_ipcs = defaultdict(list)
     [dev_ipcs[dev].append(p) for p, dev in ipcs]
@@ -122,8 +116,6 @@ def _predict_on_worker(data, params):
     try:
         # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
         m = _predict(alloc_info, coeffs, intercept, params)
-
-        print("Returned from PREDICT")
 
         [t.close() for t in open_ipcs]
         [t.join() for t in open_ipcs]
@@ -144,14 +136,8 @@ def _fit_on_worker(data, params):
 
     ipc_dev_list, devarrs_dev_list = data
 
-    print("DEV_ARRS_LIST: " + str(devarrs_dev_list))
-
     open_ipcs = [new_ipc_thread(itertools.chain([[X,y] for X,y in p]), dev) for p, dev in ipc_dev_list]
-
     alloc_info = [group(t.info(), 2) for t in open_ipcs]
-
-    print(str("ALLOC INFO: " + str(alloc_info)))
-
     alloc_info.extend(
         list(itertools.chain(
             [[(build_alloc_info(X)[0], build_alloc_info(y)[0]) for X,y in p]
@@ -177,10 +163,7 @@ def get_ipc_handles(arr):
 
 def get_input_ipc_handles(arr):
 
-    print("input_ipc_handles: " + str(arr))
-
     arrs, dev = arr
-
     ret = [(X.get_ipc_handle(), y.get_ipc_handle()) for X, y in arrs]
 
     return ret, dev
@@ -196,10 +179,7 @@ def as_gpu_matrix(arr):
 
 def to_gpu_array(arr):
 
-    print("ARR: "+ str(arr))
-
     mat = arr.to_gpu_array()
-
     dev = device_of_devicendarray(mat)
 
     # Return canonical device id as string
@@ -213,27 +193,14 @@ def inputs_to_device_arrays(arr):
     :return:
     """
 
-    print("HANDLES: "+ str(arr))
-
     mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
-
-    print("MATS: "+ str(mats))
-
-    # Both X & y should be on the same device at this point (by being on the same worker)
     dev = device_of_devicendarray(mats[0][0])
-
-    print("dev_of_ptr: " + str(dev))
-    print("DEVICE: " + str(numba.cuda.get_current_device()))
-
-    print("MATS: " + str(mats))
-    print("dev=" + str(dev))
 
     # Return canonical device id as string
     return mats, dev
 
 
 def extract_part(data, part):
-    print("DATA: "+ str(data))
     return data[part]
 
 
@@ -323,16 +290,12 @@ class LinearRegression(object):
 
         yield wait(input_devarrays)
 
-        print("input_devarrays: " + str(input_devarrays))
-
         """
         Gather IPC handles for each worker and call _fit() on each worker containing data.
         """
         res = []
 
         exec_node = input_devarrays[0][0]
-
-        print("exec_node: "+ str(exec_node))
 
         # Need to fetch coefficient parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
@@ -342,9 +305,6 @@ class LinearRegression(object):
                        for a_worker, future in not_on_worker]
 
         raw_arrays = [future for a_worker, future in on_worker]
-
-        print("ipc_handles: "+ str(ipc_handles))
-        print("raw_arrays: " + str(raw_arrays))
 
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
@@ -357,9 +317,6 @@ class LinearRegression(object):
         # We can assume a single coeff array and intercept for now.
         coeffs = (worker, client.submit(extract_part, ret, 0, workers = [worker]))
         intercept = client.submit(extract_part, ret, 1, workers = [worker])
-
-        print("COEFS: "+ str(coeffs))
-        print("INTER: "+ str(intercept))
 
         raise gen.Return((coeffs, intercept))
 
@@ -376,8 +333,6 @@ class LinearRegression(object):
         # Coeffs should be a future with a handle on a Dataframe on a single worker.
         # Intercept should be a future with a handle on a float on a single worker.
         coeffs, intercepts = client.sync(self._do_fit, X_df, y_df)
-
-        print("RES: "+ str(intercepts))
 
         self.coef_ = coeffs
         self.intercept_ = intercepts
@@ -412,8 +367,6 @@ class LinearRegression(object):
             worker = parse_host_port(first(workers))
             worker_parts.append((worker, key_to_part_dict[key]))
 
-        print("WORKER PARTS: " + str(worker_parts))
-
         """
         Build Numba devicearrays for all coefficient chunks        
         """
@@ -428,16 +381,10 @@ class LinearRegression(object):
         gpu_data_excl_worker = list(filter(lambda d: d[0] != exec_node, gpu_data))
         gpu_data_incl_worker = list(filter(lambda d: d[0] == exec_node, gpu_data))
 
-        print("ON WORKER: " + str(len(list(gpu_data_incl_worker))))
-        print("NOT ON WORKER: " + str(len(list(gpu_data_excl_worker))))
-
         ipc_handles = [client.submit(get_ipc_handles, future, workers=[worker])
                        for worker, future in gpu_data_excl_worker]
 
         raw_arrays = [future for worker, future in gpu_data_incl_worker]
-
-        print("IPCHANDLES = " + str(ipc_handles))
-        print("RAW_ARRAYS=" + str(raw_arrays))
 
         f = client.submit(_predict_on_worker,
                           (coeff_future, self.intercept_, ipc_handles, raw_arrays),

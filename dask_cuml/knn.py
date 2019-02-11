@@ -79,11 +79,6 @@ def get_ipc_handle(data):
 
 # Run on a single worker on each unique host
 def _fit(data, params):
-
-
-    print("DATA: " + str(data))
-    print("PARAMS: " + str(params))
-
     ipcs, raw_arrs = data
 
     # Separate threads to hold pointers to separate devices
@@ -94,19 +89,13 @@ def _fit(data, params):
     device_handle_map = defaultdict(list)
     [device_handle_map[dev].append(ipc) for dev, ipc in ipcs]
 
-    print("device_handle_map=" + str(device_handle_map))
-
     open_ipcs = [new_ipc_thread(ipcs, dev) for dev, ipcs in device_handle_map.items()]
 
     alloc_info = list(itertools.chain(*[t.info() for t in open_ipcs]))
     alloc_info.extend([build_alloc_info(t) for t in raw_arrs])
 
-    print("alloc_info=" + str(alloc_info))
-
     m = cumlKNN(should_downcast = params["should_downcast"])
     m.fit_mg(params["D"], alloc_info)
-
-    print("Done running fit_mg()")
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
@@ -115,11 +104,6 @@ def _fit(data, params):
 
 
 def _kneighbors(X, m, all_ranks, params):
-    from mpi4py import MPI
-
-    print("params: "+ str(params))
-    print("all_ranks: "  + str(all_ranks))
-
     return m.query_mn(X, params["k"], all_ranks)
 
 
@@ -150,10 +134,6 @@ class KNN(object):
         # deallocated on the workers.
         gpu_futures, cols = client.sync(self._get_mg_info, ddf)
 
-        print("gpu_futures=" + str(gpu_futures))
-
-        print("D=" + str(cols))
-
         # Choose a random worker on each unique host to run cuml's kNN.fit() function
         # on all the cuDFs living on that host
         master_hosts = [(host, random.sample(ports, 1)[0])
@@ -162,15 +142,10 @@ class KNN(object):
         self.host_masters = [(worker, client.submit(get_ranks, ident, workers=[worker]).result())
                              for worker, ident in zip(master_hosts, range(len(master_hosts)))]
 
-        print("HOST MASTERS: " + str(self.host_masters))
-
         f = []
         for host, port in master_hosts:
 
             gpu_futures_for_host = list(filter(lambda d: d[0][0] == host, gpu_futures))
-
-            print("gpu_futures_for_host=" + str(gpu_futures_for_host))
-
             exec_node = (host, port)
 
             # build ipc handles
@@ -182,21 +157,11 @@ class KNN(object):
 
             raw_arrays = [future for worker, future in gpu_data_incl_worker]
 
-            print("raw_arrays=" + str(raw_arrays))
-
             f.append((exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
                                    {"D": cols, "ranks": self.host_masters, "should_downcast":self.should_downcast},
                                    workers=[exec_node])))
 
         wait(f)
-
-        print("WHO HAS: "+ str(client.who_has()))
-
-        print("Terminating IPCs")
-
-        # self.terminate_ipcs(client, f)
-
-        print("Setting submodels")
 
         # The model on each unique host is held for futures queries
         self.sub_models = dict(f)
@@ -275,19 +240,12 @@ class KNN(object):
             raise Exception("Input should be a Dask DataFrame")
 
         key_to_part_dict = dict([(str(part.key), part) for part in parts])
-
-        print("KEY TO PART DICT: " + str(key_to_part_dict))
-
         who_has = yield client.who_has(parts)
-
-        print("WHO HAS: " + str(who_has))
 
         worker_map = []
         for key, workers in who_has.items():
             worker = parse_host_port(first(workers))
             worker_map.append((worker, key_to_part_dict[key]))
-
-        print("WORKER_MAP: " + str(worker_map))
 
         gpu_data = [(worker, client.submit(to_gpu_matrix, part, workers=[worker]))
                     for worker, part in worker_map]
