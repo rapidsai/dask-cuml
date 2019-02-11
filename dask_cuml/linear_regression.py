@@ -125,29 +125,13 @@ def _predict_on_worker(data, params):
 
         print("Returned from PREDICT")
 
-        return open_ipcs, devarrs, m
+        [t.close() for t in open_ipcs]
+        [t.join() for t in open_ipcs]
+
+        return m
 
     except Exception as e:
         print("Failure: " + str(e))
-
-
-def close_threads(d):
-    ipc_threads, devarrs, result = d
-    [t.close() for t in ipc_threads]
-
-
-def join_threads(d):
-    ipc_threads, devarrs, result = d
-    [t.join() for t in ipc_threads]
-
-
-def get_result(d):
-
-    print("get_result:  " + str(d))
-
-    ipc_threads, devarrs, result = d
-    return result
-
 
 def group(lst, n):
     for i in range(0, len(lst), n):
@@ -176,7 +160,10 @@ def _fit_on_worker(data, params):
     # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
     m = _fit(alloc_info, params)
 
-    return open_ipcs, devarrs_dev_list, m
+    [t.close() for t in open_ipcs]
+    [t.join() for t in open_ipcs]
+
+    return m
 
 
 def build_alloc_info(p): return [p.__cuda_array_interface__]
@@ -341,7 +328,6 @@ class LinearRegression(object):
         """
         Gather IPC handles for each worker and call _fit() on each worker containing data.
         """
-        worker_results = {}
         res = []
 
         exec_node = input_devarrays[0][0]
@@ -363,28 +349,14 @@ class LinearRegression(object):
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
 
-        worker_results[exec_node] = client.submit(_fit_on_worker, (ipc_handles, raw_arrays),
+        ret = client.submit(_fit_on_worker, (ipc_handles, raw_arrays),
                                                   self._build_params_map(), workers=[exec_node])
-
-        res.append(worker_results[exec_node])
-
-        yield wait(res)
-
-        d = [client.submit(close_threads, future) for future in res]
-        yield wait(d)
-
-        d = [client.submit(join_threads, future) for future in res]
-        yield wait(d)
-
-        ret = [(worker, client.submit(get_result, futures, workers= [worker]))
-               for worker, futures in worker_results.items()][0]
 
         yield wait(ret)
 
         # We can assume a single coeff array and intercept for now.
-        worker, p = ret
-        coeffs = (worker, client.submit(extract_part, p, 0, workers = [worker]))
-        intercept = client.submit(extract_part, p, 1, workers = [worker])
+        coeffs = (worker, client.submit(extract_part, ret, 0, workers = [worker]))
+        intercept = client.submit(extract_part, ret, 1, workers = [worker])
 
         print("COEFS: "+ str(coeffs))
         print("INTER: "+ str(intercept))
@@ -474,22 +446,12 @@ class LinearRegression(object):
 
         yield wait(f)
 
-        print("f=" + str(f))
-
-        # We can safely close our local threads now that the c++ API is holding onto
-        # its own resources.
-        d = client.submit(close_threads, f)
-        yield wait(d)
-
-        d = client.submit(join_threads, f)
-        yield wait(d)
 
         # Turn resulting cudf future into a dask-cudf and return it. For now, returning the futures
         # pointing to the data.
-        ret = client.submit(get_result, f)
 
-        yield wait(ret)
-        return gen.Return(ret)
+        yield wait(f)
+        return gen.Return(f)
 
     def predict(self, X):
         """
