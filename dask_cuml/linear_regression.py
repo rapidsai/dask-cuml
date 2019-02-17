@@ -17,6 +17,7 @@ from .core import *
 from threading import Lock, Thread
 
 # from cuml import LinearRegression as cumlLinearRegression
+from cuml import ols_spmg as cuOLS
 import cuml
 import logging
 
@@ -51,10 +52,7 @@ import os
 
 def _fit(dfs, params):
     """
-    This performs the actual MG fit logic. It should
-        1. Create an empty numba array to hold the resulting coefficients
-        2. Make call to cython function with list of cudfs
-        3. Return resulting coefficients.
+    This performs the actual MG fit logic.
     :param [(X.__cuda_array_interface__, y.__cuda_array_interface__)]:
         list of tuples of __cuda_array_interface__ dicts for X & y values
     :param params
@@ -67,7 +65,16 @@ def _fit(dfs, params):
 
     print("DFS in FIT: " + str(dfs))
 
+    print(os.environ["CUDA_VISIBLE_DEVICES"].split(","))
+
     try:
+        ols = cuOLS()
+
+        print(params)
+
+        ols.fit(dfs, params)
+
+        #TODO: remove return, not needed since we are passing the pointers to coeffs in params
         ret = (cudf.Series([1, 2, 3, 4]), 5)
         return ret
     except Exception as e:
@@ -104,12 +111,17 @@ def _predict(X_dfs, coeff_ptr, intercept, params):
 def _predict_on_worker(data, params):
     coeffs, intercept, ipcs, devarrs = data
 
+
+    print(ipcs)
+
     dev_ipcs = defaultdict(list)
     [dev_ipcs[dev].append(p) for p, dev in ipcs]
 
     open_ipcs = [new_ipc_thread(p, dev) for dev, p in dev_ipcs.items()]
+    print(open_ipcs)
 
-    alloc_info = [t.info() for t in open_ipcs]
+    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
+    print(alloc_info)
     alloc_info.extend([build_alloc_info(t) for t, dev in devarrs])
 
     try:
@@ -136,14 +148,25 @@ def _fit_on_worker(data, params):
 
     ipc_dev_list, devarrs_dev_list = data
 
-    open_ipcs = [new_ipc_thread(itertools.chain([[X,y] for X,y in p]), dev) for p, dev in ipc_dev_list]
-    alloc_info = [group(t.info(), 2) for t in open_ipcs]
+    print(":::::::::::::::::::::::fit_on_worker")
+
+    print(ipc_dev_list)
+
+
+    #TODO: One ipc thread per device instead of per x,y,coef tuple
+    open_ipcs = []
+    for p, dev in ipc_dev_list:
+        for x, y, coef in p:
+            ipct = new_ipc_thread([x, y, coef], dev)
+            open_ipcs.append(ipct)
+
+    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
     alloc_info.extend(
         list(itertools.chain(
-            [[(build_alloc_info(X)[0], build_alloc_info(y)[0]) for X,y in p]
+            [[(build_alloc_info(X)[0], build_alloc_info(y)[0], build_alloc_info(coef)[0]) for X,y,coef in p]
              for p, dev in devarrs_dev_list])))
 
-    # Call _predict() w/ all the cudfs on this worker and our coefficient pointers
+    # Call _fit() w/ all the cudfs on this worker and our coefficient pointers
     m = _fit(alloc_info, params)
 
     [t.close() for t in open_ipcs]
@@ -156,15 +179,13 @@ def build_alloc_info(p): return [p.__cuda_array_interface__]
 
 
 def get_ipc_handles(arr):
-
-
     return arr[0].get_ipc_handle(), arr[1]
 
 
 def get_input_ipc_handles(arr):
 
     arrs, dev = arr
-    ret = [(X.get_ipc_handle(), y.get_ipc_handle()) for X, y in arrs]
+    ret = [(X.get_ipc_handle(), y.get_ipc_handle(), coef.get_ipc_handle()) for X, y, coef in arrs]
 
     return ret, dev
 
@@ -172,6 +193,8 @@ def get_input_ipc_handles(arr):
 def as_gpu_matrix(arr):
     mat = arr.as_gpu_matrix(order="F")
     dev = device_of_devicendarray(mat)
+
+    print("DEVICE::::::::" + dev)
 
     # Return canonical device id as string
     return mat, dev
@@ -193,7 +216,7 @@ def inputs_to_device_arrays(arr):
     :return:
     """
 
-    mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array()) for X, y in arr]
+    mats = [(X.as_gpu_matrix(order="F"), y.to_gpu_array(), coef.to_gpu_array()) for X, y, coef in arr]
     dev = device_of_devicendarray(mats[0][0])
 
     # Return canonical device id as string
@@ -246,12 +269,17 @@ class LinearRegression(object):
     @gen.coroutine
     def _do_fit(self, X_df, y_df):
 
+        coefs = cudf.Series(np.zeros(X_df.shape[1]))
+        print(coefs)
 
+        # Creating the coefs as a distributed cudf
+        self.coef_ = dask_cudf.from_cudf(coefs, npartitions=2).persist()
         client = default_client()
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X_df.to_delayed()
         label_parts = y_df.to_delayed()
+        coef_parts = self.coef_.to_delayed()
         if isinstance(data_parts, np.ndarray):
             assert data_parts.shape[1] == 1
             data_parts = data_parts.flatten().tolist()
@@ -260,7 +288,7 @@ class LinearRegression(object):
             label_parts = label_parts.flatten().tolist()
 
         # Arrange parts into pairs.  This enforces co-locality
-        parts = list(map(delayed, zip(data_parts, label_parts)))
+        parts = list(map(delayed, zip(data_parts, label_parts, coef_parts)))
         parts = client.compute(parts)  # Start computation in the background
         yield wait(parts)
 
@@ -281,7 +309,7 @@ class LinearRegression(object):
             worker_parts[worker].append(key_to_part_dict[key])
 
         """
-        Create IP Handles on each worker hosting input data 
+        Create IP Handles on each worker hosting input data
         """
 
         # Format of input_devarrays = ([(X, y)..], dev)
@@ -297,14 +325,22 @@ class LinearRegression(object):
 
         exec_node = input_devarrays[0][0]
 
+        print("HERE:::::::::::::::::::::::::::::::::::::::")
+        print(input_devarrays)
+
         # Need to fetch coefficient parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
+        print(on_worker)
         not_on_worker = list(filter(lambda x: x[0] != exec_node, input_devarrays))
+        print(not_on_worker)
 
         ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
                        for a_worker, future in not_on_worker]
 
         raw_arrays = [future for a_worker, future in on_worker]
+
+
+        print("HERE:::::::::::::::::::::::::::::::::::::::")
 
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
@@ -315,7 +351,7 @@ class LinearRegression(object):
         yield wait(ret)
 
         # We can assume a single coeff array and intercept for now.
-        coeffs = (worker, client.submit(extract_part, ret, 0, workers = [worker]))
+        # coeffs = (worker, client.submit(extract_part, ret, 0, workers = [worker]))
         intercept = client.submit(extract_part, ret, 1, workers = [worker])
 
         raise gen.Return((coeffs, intercept))
@@ -368,7 +404,7 @@ class LinearRegression(object):
             worker_parts.append((worker, key_to_part_dict[key]))
 
         """
-        Build Numba devicearrays for all coefficient chunks        
+        Build Numba devicearrays for all coefficient chunks
         """
 
         # Have worker running the coeffs execute the predict logic
