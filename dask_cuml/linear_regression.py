@@ -68,9 +68,6 @@ def _fit(dfs, params):
     print("DFS in FIT: " + str(dfs))
 
     try:
-        # TODO: Using Series for coeffs throws an error after the 2nd or third training of a model
-        # The error is related to the bitmask or pickle serialization. Very strange,
-        # considering there shouldn't be any pickling in this line.
         ret = (cudf.Series([1, 2, 3, 4]), 5)
         return ret
     except Exception as e:
@@ -99,6 +96,8 @@ def _predict(X_dfs, coeff_ptr, intercept, params):
     :return:
         cudf containing predictions
     """
+    print("ALLOC_INFO: " + str(X_dfs))
+
     return cudf.Series([1, 2, 3, 4, 5])
 
 
@@ -124,6 +123,7 @@ def _predict_on_worker(data, params):
 
     except Exception as e:
         print("Failure: " + str(e))
+
 
 def group(lst, n):
     for i in range(0, len(lst), n):

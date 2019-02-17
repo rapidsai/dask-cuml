@@ -40,5 +40,4 @@ def test_end_to_end():
 
     assert(0==1)
 
-
     cluster.close()

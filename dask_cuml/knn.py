@@ -60,6 +60,7 @@ def to_gpu_matrix(df):
         traceback.print_exc()
         pass
 
+
 def build_alloc_info(data):
     dev, gpu_matrix = data
     return gpu_matrix.__cuda_array_interface__
@@ -76,6 +77,7 @@ def get_ipc_handle(data):
         logging.error("Error in get_ipc_handles(dev=" + str(dev) + "): " + str(e))
         traceback.print_exc()
         pass
+
 
 # Run on a single worker on each unique host
 def _fit(data, params):
