@@ -97,7 +97,7 @@ def _fit(data, params):
     alloc_info.extend([build_alloc_info(t) for t in raw_arrs])
 
     m = cumlKNN(should_downcast = params["should_downcast"])
-    m.fit_mg(params["D"], alloc_info)
+    m._fit_mg(params["D"], alloc_info)
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
@@ -105,8 +105,58 @@ def _fit(data, params):
     return m
 
 
-def _kneighbors(X, m, all_ranks, params):
-    return m.query_mn(X, params["k"], all_ranks)
+def _kneighbors(data, m, params):
+
+    ipc_dev_list, devarrs_dev_list = data
+
+    print(":::::::::::::::::::::::fit_on_worker")
+
+    print(ipc_dev_list)
+
+
+    #TODO: One ipc thread per device instead of per x,y,coef tuple
+    open_ipcs = []
+    for p, dev in ipc_dev_list:
+        for x, i, d in p:
+            ipct = new_ipc_thread([x, i, d], dev)
+            open_ipcs.append(ipct)
+
+    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
+    alloc_info.extend(
+        list(itertools.chain(
+            [[(build_alloc_info(X)[0], build_alloc_info(inds)[0], build_alloc_info(dists)[0]) for X,inds,dists in p]
+             for p, dev in devarrs_dev_list])))
+
+    for alloc in alloc_info:
+        X, inds, dists = alloc
+        m = m._query(X["data"][0], X["shape"][0],params["k"], inds["data"][0], dists["data"][0])
+
+    [t.close() for t in open_ipcs]
+    [t.join() for t in open_ipcs]
+
+    return m
+
+
+def inputs_to_device_arrays(arr):
+    """
+    :param arr:
+        A tuple in the form of (X, y)
+    :return:
+    """
+
+    mats = [(X.as_gpu_matrix(order="F"), inds.to_gpu_array(), dists.to_gpu_array()) for X, inds, dists in arr]
+    dev = device_of_devicendarray(mats[0][0])
+
+    # Return canonical device id as string
+    return mats, dev
+
+
+def get_input_ipc_handles(arr):
+
+    arrs, dev = arr
+    ret = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle()) for X, inds, dists in arrs]
+
+    return ret, dev
 
 
 class KNN(object):
@@ -120,8 +170,8 @@ class KNN(object):
     """
 
     def __init__(self, should_downcast = False):
-        self.sub_models = []
-        self.host_masters = []
+        self.model = None
+        self.master_host = None
         self.should_downcast = should_downcast
 
     def fit(self, ddf):
@@ -136,51 +186,49 @@ class KNN(object):
         # deallocated on the workers.
         gpu_futures, cols = client.sync(self._get_mg_info, ddf)
 
+        host_dict = self._build_host_dict(gpu_futures, client).items()
+        if len(host_dict) > 1:
+            raise Exception("Dask cluster appears to span hosts. Current "
+                            "multi-GPU implementation is limited to a single host")
+
         # Choose a random worker on each unique host to run cuml's kNN.fit() function
-        # on all the cuDFs living on that host
-        master_hosts = [(host, random.sample(ports, 1)[0])
-                        for host, ports in self._build_host_dict(gpu_futures, client).items()]
+        # on all the cuDFs living on that host.
+        self.master_host = [(host, random.sample(ports, 1)[0])
+                              for host, ports in host_dict][0]
 
-        self.host_masters = [(worker, client.submit(get_ranks, ident, workers=[worker]).result())
-                             for worker, ident in zip(master_hosts, range(len(master_hosts)))]
+        host, port = self.master_host
 
-        f = []
-        for host, port in master_hosts:
+        gpu_futures_for_host = list(filter(lambda d: d[0][0] == host, gpu_futures))
+        exec_node = (host, port)
 
-            gpu_futures_for_host = list(filter(lambda d: d[0][0] == host, gpu_futures))
-            exec_node = (host, port)
+        # build ipc handles
+        gpu_data_excl_worker = list(filter(lambda d: d[0] != exec_node, gpu_futures_for_host))
+        gpu_data_incl_worker = list(filter(lambda d: d[0] == exec_node, gpu_futures_for_host))
 
-            # build ipc handles
-            gpu_data_excl_worker = list(filter(lambda d: d[0] != exec_node, gpu_futures_for_host))
-            gpu_data_incl_worker = list(filter(lambda d: d[0] == exec_node, gpu_futures_for_host))
+        ipc_handles = [client.submit(get_ipc_handle, future, workers=[worker])
+                       for worker, future in gpu_data_excl_worker]
 
-            ipc_handles = [client.submit(get_ipc_handle, future, workers=[worker])
-                           for worker, future in gpu_data_excl_worker]
+        raw_arrays = [future for worker, future in gpu_data_incl_worker]
 
-            raw_arrays = [future for worker, future in gpu_data_incl_worker]
-
-            f.append((exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
-                                   {"D": cols, "ranks": self.host_masters, "should_downcast":self.should_downcast},
-                                   workers=[exec_node])))
+        f = (exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
+                               {"D": cols, "should_downcast":self.should_downcast},
+                               workers=[exec_node]))
 
         wait(f)
 
         # The model on each unique host is held for futures queries
-        self.sub_models = dict(f)
+        self.model = f
 
     def kneighbors(self, X, k):
-        """
-        Queries the multi-node multi-gpu knn model by propagating the query cudf to each unique host.
-        Eventually, this will support dask_cudf inputs but for now it supports a single cudf.
 
-        1. Push X to the master worker on each unique host (cloudpickle serializer should
-           allow X to be smart for minimizing copies as much as possible)
-        2. Run the kNN query on each master worker
+        """
+        Queries the multi-gpu knn model given a dask-cudf as the query
+
+        1. Create 2 new Dask dataframes to hold output (1 chunk each per chunk of X), co-locate pieces w/ X.
+        2. Get IPC handles for each dataframe. Use IPCThread to hold onto them while calling query.
 
         :param input:
-            A cudf to distribute across the workers to run the kNN in parallel.
-            NOTE: This is a single cudf for the first iteration and will become a
-            dask_cudf in future iterations.
+            A dask-cudf for calculating the kneighbors
         :param k:
             The number of nearest neighbors to query for each input vector.
         :return:
@@ -189,17 +237,91 @@ class KNN(object):
 
         client = default_client()
 
-        X_replicated = dict([(worker, client.scatter(X, workers=[worker]))
-                            for worker, rank in self.host_masters])
+        # We need to replicate the divisions of the X dataframe and create indices and distances matrices
+        div = list(X.divisions)
+        div[-1] += 1
 
-        ranks = [r for h, r in self.host_masters]
+        # loop through divisions, creating 2 new cudfs (1 for indices, one for dists)
 
-        results = [(worker, client.submit(_kneighbors, X_part, self.sub_models[worker], ranks,
-                                          {"k": k},workers=[worker]))
-                   for worker, X_part in X_replicated.items()]
+        index_dfs = []
+        dist_dfs = []
 
-        # first rank listed in host_masters provides the actual output
-        return list(filter(lambda x: x[0] == self.host_masters[0][0], results))[0]
+        for i in range(1, len(div)):
+
+            size = div[i]-div[i-1]
+
+            # Create a cudfs of size (N, k)
+            ind_df = cudf.DataFrame([(str(j), np.zeros((size))) for j in range(k)])
+            dist_df = cudf.DataFrame([(str(j), np.zeros((size))) for j in range(k)])
+            index_dfs.append([dask_cudf.from_cudf(ind_df)])
+            dist_dfs.append([dask_cudf.from_cudf(dist_df)])
+
+        final_ind_df = dask_cudf.core.stack_partitions(index_dfs, X.divisions)
+        final_dist_df = dask_cudf.core.stack_partitions(dist_df, X.divisions)
+
+        # Break apart Dask.array/dataframe into chunks/parts
+        data_parts = X.to_delayed()
+        dist_parts = final_dist_df.to_delayed()
+        ind_parts = final_ind_df.to_delayed()
+
+        # Arrange parts into pairs.  This enforces co-locality
+        parts = list(map(delayed, zip(data_parts, dist_parts, ind_parts)))
+        parts = client.compute(parts)  # Start computation in the background
+        yield wait(parts)
+
+        for part in parts:
+            if part.status == 'error':
+                yield part  # trigger error locally
+
+        # A dict in the form of { part_key: part }
+        key_to_part_dict = dict([(str(part.key), part) for part in parts])
+
+        who_has = yield client.who_has(parts)
+
+        worker_parts = {}
+        for key, workers in who_has.items():
+            worker = parse_host_port(first(workers))
+            if worker not in worker_parts:
+                worker_parts[worker] = []
+            worker_parts[worker].append(key_to_part_dict[key])
+
+        """
+        Create IP Handles on each worker hosting input data
+        """
+
+        # Format of input_devarrays = ([(X, y)..], dev)
+        input_devarrays = [(worker, client.submit(inputs_to_device_arrays, part, workers=[worker]))
+                    for worker, part in worker_parts.items()]
+
+        yield wait(input_devarrays)
+
+        """
+        Gather IPC handles for each worker and call _fit() on each worker containing data.
+        """
+        exec_node, model = self.model
+
+        print("HERE:::::::::::::::::::::::::::::::::::::::")
+        print(input_devarrays)
+
+        # Need to fetch coefficient parts on worker
+        on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
+        print(on_worker)
+        not_on_worker = list(filter(lambda x: x[0] != exec_node, input_devarrays))
+        print(not_on_worker)
+
+        ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
+                       for a_worker, future in not_on_worker]
+
+        raw_arrays = [future for a_worker, future in on_worker]
+
+        # IPC Handles are loaded in separate threads on worker so they can be
+        # used to make calls through cython
+
+        ret = client.submit(_kneighbors, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
+
+        yield wait(ret)
+
+        return final_ind_df, final_dist_df
 
     def get(self, indices):
         """

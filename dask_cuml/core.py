@@ -114,17 +114,6 @@ def new_ipc_thread(ipcs, dev):
     return t
 
 
-def get_ranks(l):
-    from mpi4py import MPI
-    try:
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        return rank
-
-    except Exception as e:
-        print("Error fetching rank: %s" % str(e))
-
-
 def select_device(dev, close=True):
     if numba.cuda.get_current_device().id != dev:
         logging.warn("Selecting device " + str(dev))
