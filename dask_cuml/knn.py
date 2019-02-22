@@ -113,7 +113,6 @@ def _kneighbors(data, m, params):
 
     print(ipc_dev_list)
 
-
     #TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
     for p, dev in ipc_dev_list:
@@ -194,7 +193,7 @@ class KNN(object):
         # Choose a random worker on each unique host to run cuml's kNN.fit() function
         # on all the cuDFs living on that host.
         self.master_host = [(host, random.sample(ports, 1)[0])
-                              for host, ports in host_dict][0]
+                            for host, ports in host_dict][0]
 
         host, port = self.master_host
 
@@ -246,15 +245,29 @@ class KNN(object):
         index_dfs = []
         dist_dfs = []
 
+        print("META: " + str(X._meta))
+
+        print("Divisions: "+ str(X.divisions))
+
         for i in range(1, len(div)):
 
             size = div[i]-div[i-1]
 
             # Create a cudfs of size (N, k)
-            ind_df = cudf.DataFrame([(str(j), np.zeros((size))) for j in range(k)])
-            dist_df = cudf.DataFrame([(str(j), np.zeros((size))) for j in range(k)])
-            index_dfs.append([dask_cudf.from_cudf(ind_df)])
-            dist_dfs.append([dask_cudf.from_cudf(dist_df)])
+            ind_df = cudf.DataFrame([(str(j), np.zeros(size, dtype=np.int64)) for j in range(k)])
+            dist_df = cudf.DataFrame([(str(j), np.zeros(size, dtype=np.float32)) for j in range(k)])
+
+            print("ind: \n" + str(ind_df) + "\n")
+            print("dist: \n" + str(dist_df) + "\n")
+
+            i_df = dask_cudf.from_cudf(ind_df, npartitions=1)
+
+            print("I_META: " + str(i_df._meta))
+
+            index_dfs.append(i_df)
+
+            d_df = dask_cudf.from_cudf(dist_df, npartitions=1)
+            dist_dfs.append(d_df)
 
         final_ind_df = dask_cudf.core.stack_partitions(index_dfs, X.divisions)
         final_dist_df = dask_cudf.core.stack_partitions(dist_df, X.divisions)

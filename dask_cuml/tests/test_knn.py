@@ -30,7 +30,7 @@ def test_end_to_end():
     lr = cumlKNN.KNN()
     lr.fit(X_df)
 
-    worker, f = lr.kneighbors(X, 1)
+    worker, f = lr.kneighbors(X_df, 1)
 
     D, I = f.result()
 
