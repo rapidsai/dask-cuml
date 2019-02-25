@@ -20,23 +20,20 @@ from dask_cuml import core
 def test_end_to_end():
 
     cluster = LocalCUDACluster(threads_per_worker=10)
-    client = Client(cluster)
+    client = Client("tcp://127.0.0.1:34411")
 
-    X = cudf.DataFrame([('a', [0, 1, 2, 3, 4]),
-                        ('b', [5, 6, 7, 7, 8])])
+    X = cudf.DataFrame([('a', np.array([0, 1, 2, 3, 4], dtype=np.float32)),
+                        ('b', np.array([5, 6, 7, 7, 8], dtype=np.float32))])
 
-    X_df = dask_cudf.from_cudf(X, chunksize=1).persist()
+    X_df = dask_cudf.from_cudf(X, npartitions=2).persist()
 
     lr = cumlKNN.KNN()
     lr.fit(X_df)
 
-    worker, f = lr.kneighbors(X_df, 1)
+    I, D = lr.kneighbors(X_df, 2)
 
-    D, I = f.result()
-
-    print(str(D))
-
-    print(str(I))
+    print("D: " + str(D.compute()))
+    print("I: " + str(I.compute()))
 
     assert(0==1)
 

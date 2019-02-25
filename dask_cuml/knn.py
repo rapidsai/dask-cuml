@@ -24,6 +24,15 @@ import random
 import itertools
 
 
+from dask.distributed import get_worker, get_client, Client
+
+from dask import delayed
+from collections import defaultdict
+from dask.distributed import wait, default_client
+import dask.dataframe as dd
+import dask.array as da
+
+
 from tornado import gen
 import dask_cudf, cudf
 
@@ -32,13 +41,6 @@ import logging
 import os
 import time
 
-from dask.distributed import get_worker, get_client, Client
-
-from dask import delayed
-from collections import defaultdict
-from dask.distributed import wait, default_client
-import dask.dataframe as dd
-import dask.array as da
 
 import numpy as np
 
@@ -80,7 +82,7 @@ def get_ipc_handle(data):
 
 
 # Run on a single worker on each unique host
-def _fit(data, params):
+def _fit_on_worker(data, params):
     ipcs, raw_arrs = data
 
     # Separate threads to hold pointers to separate devices
@@ -105,11 +107,14 @@ def _fit(data, params):
     return m
 
 
-def _kneighbors(data, m, params):
+def _kneighbors_on_worker(data, m, params):
+
+    print("DATA: " + str(data))
+    print("params: "+ str(params))
 
     ipc_dev_list, devarrs_dev_list = data
 
-    print(":::::::::::::::::::::::fit_on_worker")
+    print(":::::::::::::::::::::::kneighbors_on_worker")
 
     print(ipc_dev_list)
 
@@ -121,19 +126,30 @@ def _kneighbors(data, m, params):
             open_ipcs.append(ipct)
 
     alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
-    alloc_info.extend(
-        list(itertools.chain(
-            [[(build_alloc_info(X)[0], build_alloc_info(inds)[0], build_alloc_info(dists)[0]) for X,inds,dists in p]
-             for p, dev in devarrs_dev_list])))
+
+    print("About to build alloc info for devicendarrays...")
+
+    print("devarrs_dev_list=" + str(devarrs_dev_list))
+
+    for p, dev in devarrs_dev_list:
+        for X, inds, dists in p:
+            alloc_info.extend([[build_alloc_info((dev, X)),
+                               build_alloc_info((dev, inds)),
+                               build_alloc_info((dev, dists))]])
+
+    print("alloc_info: " + str(alloc_info))
 
     for alloc in alloc_info:
+
+        print("ALLOC: " + str(alloc))
+
         X, inds, dists = alloc
-        m = m._query(X["data"][0], X["shape"][0],params["k"], inds["data"][0], dists["data"][0])
+        m._query(X["data"][0], X["shape"][0], params["k"], inds["data"][0], dists["data"][0])
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
 
-    return m
+    return data
 
 
 def inputs_to_device_arrays(arr):
@@ -142,8 +158,8 @@ def inputs_to_device_arrays(arr):
         A tuple in the form of (X, y)
     :return:
     """
-
-    mats = [(X.as_gpu_matrix(order="F"), inds.to_gpu_array(), dists.to_gpu_array()) for X, inds, dists in arr]
+    mats = [(X.as_gpu_matrix(order="F"), inds.as_gpu_matrix(order="F"), dists.as_gpu_matrix(order="F"))
+            for X, inds, dists in arr]
     dev = device_of_devicendarray(mats[0][0])
 
     # Return canonical device id as string
@@ -209,7 +225,7 @@ class KNN(object):
 
         raw_arrays = [future for worker, future in gpu_data_incl_worker]
 
-        f = (exec_node, client.submit(_fit, (ipc_handles, raw_arrays),
+        f = (exec_node, client.submit(_fit_on_worker, (ipc_handles, raw_arrays),
                                {"D": cols, "should_downcast":self.should_downcast},
                                workers=[exec_node]))
 
@@ -218,25 +234,13 @@ class KNN(object):
         # The model on each unique host is held for futures queries
         self.model = f
 
-    def kneighbors(self, X, k):
-
-        """
-        Queries the multi-gpu knn model given a dask-cudf as the query
-
-        1. Create 2 new Dask dataframes to hold output (1 chunk each per chunk of X), co-locate pieces w/ X.
-        2. Get IPC handles for each dataframe. Use IPCThread to hold onto them while calling query.
-
-        :param input:
-            A dask-cudf for calculating the kneighbors
-        :param k:
-            The number of nearest neighbors to query for each input vector.
-        :return:
-            dists and indices of the k-nearest neighbors to the input vectors
-        """
+    @gen.coroutine
+    def _kneighbors(self, X, k):
 
         client = default_client()
 
-        # We need to replicate the divisions of the X dataframe and create indices and distances matrices
+        # We need to replicate the divisions of the X dataframe and
+        # create indices and distances matrices
         div = list(X.divisions)
         div[-1] += 1
 
@@ -254,23 +258,22 @@ class KNN(object):
             size = div[i]-div[i-1]
 
             # Create a cudfs of size (N, k)
-            ind_df = cudf.DataFrame([(str(j), np.zeros(size, dtype=np.int64)) for j in range(k)])
-            dist_df = cudf.DataFrame([(str(j), np.zeros(size, dtype=np.float32)) for j in range(k)])
-
-            print("ind: \n" + str(ind_df) + "\n")
-            print("dist: \n" + str(dist_df) + "\n")
+            ind_df = cudf.DataFrame({str(j): np.zeros(size, dtype=np.int64, order="F")
+                                     for j in range(k)})
+            dist_df = cudf.DataFrame({str(j): np.zeros(size, dtype=np.float32, order="F")
+                                      for j in range(k)})
 
             i_df = dask_cudf.from_cudf(ind_df, npartitions=1)
-
-            print("I_META: " + str(i_df._meta))
-
             index_dfs.append(i_df)
 
             d_df = dask_cudf.from_cudf(dist_df, npartitions=1)
             dist_dfs.append(d_df)
 
-        final_ind_df = dask_cudf.core.stack_partitions(index_dfs, X.divisions)
-        final_dist_df = dask_cudf.core.stack_partitions(dist_df, X.divisions)
+        final_ind_df = dask_cudf.core.stack_partitions(index_dfs, X.divisions).persist()
+        final_dist_df = dask_cudf.core.stack_partitions(dist_dfs, X.divisions).persist()
+
+        yield wait(final_ind_df)
+        yield wait(final_dist_df)
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X.to_delayed()
@@ -313,14 +316,9 @@ class KNN(object):
         """
         exec_node, model = self.model
 
-        print("HERE:::::::::::::::::::::::::::::::::::::::")
-        print(input_devarrays)
-
         # Need to fetch coefficient parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
-        print(on_worker)
         not_on_worker = list(filter(lambda x: x[0] != exec_node, input_devarrays))
-        print(not_on_worker)
 
         ipc_handles = [client.submit(get_input_ipc_handles, future, workers=[a_worker])
                        for a_worker, future in not_on_worker]
@@ -330,11 +328,30 @@ class KNN(object):
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
 
-        ret = client.submit(_kneighbors, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
+        ret = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
 
         yield wait(ret)
 
-        return final_ind_df, final_dist_df
+        return gen.Return((final_ind_df, final_dist_df))
+
+    def kneighbors(self, X, k):
+
+        """
+        Queries the multi-gpu knn model given a dask-cudf as the query
+
+        1. Create 2 new Dask dataframes to hold output (1 chunk each per chunk of X), co-locate pieces w/ X.
+        2. Get IPC handles for each dataframe. Use IPCThread to hold onto them while calling query.
+
+        :param input:
+            A dask-cudf for calculating the kneighbors
+        :param k:
+            The number of nearest neighbors to query for each input vector.
+        :return:
+            dists and indices of the k-nearest neighbors to the input vectors
+        """
+        return default_client().sync(self._kneighbors, X, k).value
+
+
 
     def get(self, indices):
         """
