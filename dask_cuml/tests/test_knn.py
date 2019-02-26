@@ -37,8 +37,6 @@ def test_end_to_end():
     parts = I.to_delayed()
     who_has = client.who_has(parts)
 
-    print("WHO_HAS: "+ str(who_has))
-
     print("D: " + str(D.compute()))
     print("I: " + str(I.compute()))
 

@@ -43,7 +43,6 @@ import logging
 import os
 import time
 
-
 import numpy as np
 
 from toolz import first, assoc
@@ -111,14 +110,7 @@ def _fit_on_worker(data, params):
 
 def _kneighbors_on_worker(data, m, params):
 
-    print("DATA: " + str(data))
-    print("params: "+ str(params))
-
     ipc_dev_list, devarrs_dev_list = data
-
-    print(":::::::::::::::::::::::kneighbors_on_worker")
-
-    print(ipc_dev_list)
 
     #TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
@@ -129,22 +121,13 @@ def _kneighbors_on_worker(data, m, params):
 
     alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
 
-    print("About to build alloc info for devicendarrays...")
-
-    print("devarrs_dev_list=" + str(devarrs_dev_list))
-
     for p, dev, _ in devarrs_dev_list:
         for X, inds, dists in p:
             alloc_info.extend([[build_alloc_info((dev, X)),
                                build_alloc_info((dev, inds)),
                                build_alloc_info((dev, dists))]])
 
-    print("alloc_info: " + str(alloc_info))
-
     for alloc in alloc_info:
-
-        print("ALLOC: " + str(alloc))
-
         X, inds, dists = alloc
         m._query(X["data"][0], X["shape"][0], params["k"], inds["data"][0], dists["data"][0])
 
@@ -161,9 +144,6 @@ def input_to_device_arrays(X, params):
         A tuple in the form of (X, y)
     :return:
     """
-
-    print("INDEX: " + str(X[0].index.values[0]))
-    print("INDEX: " + str(X[0].index.values[-1]))
 
     start_idx = X[0].index.values[0]
     stop_idx = X[0].index.values[-1]
@@ -358,20 +338,11 @@ class KNN(object):
         # Sort delayed dfs by their starting index
         local_dfs.sort(key = lambda x: x[2][0])
 
-        print("local_ddfs=" + str(local_dfs))
-
-        print(str(default_client().who_has()))
-
-        print("X_divisions: "+ str(X.divisions))
-
-        print(str([f[2] for f in local_dfs]))
-
         I_ddf = dask_cudf.from_delayed(
             [f[0] for f in local_dfs]).persist()
         D_ddf = dask_cudf.from_delayed(
             [f[1] for f in local_dfs]).persist()
 
-        print("DIVISIONS: " + str(I_ddf.divisions))
         return I_ddf, D_ddf
 
 
