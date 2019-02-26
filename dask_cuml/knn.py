@@ -206,8 +206,8 @@ def build_dask_dfs(arrs, params):
         D[str(i)] = D_ndarr[:, i]
     D = D.set_index(np.arange(idx[0], idx[1]+1))
 
-    I_ddf = dask_cudf.from_cudf(I, npartitions=1)
-    D_ddf = dask_cudf.from_cudf(D, npartitions=1)
+    I_ddf = dask.delayed(I)
+    D_ddf = dask.delayed(D)
 
     return I_ddf, D_ddf
 
@@ -361,10 +361,10 @@ class KNN(object):
 
         print("X_divisions: "+ str(X.divisions))
 
-        I_ddf = dask_cudf.core.stack_partitions(
-            [f[0] for f in local_dfs], X.divisions)
-        D_ddf = dask_cudf.core.stack_partitions(
-            [f[1] for f in local_dfs], X.divisions)
+        I_ddf = dask_cudf.from_delayed(
+            [f[0] for f in local_dfs])
+        D_ddf = dask_cudf.from_delayed(
+            [f[1] for f in local_dfs])
 
         print("DIVISIONS: " + str(I_ddf.divisions))
         return I_ddf, D_ddf

@@ -20,7 +20,7 @@ from dask_cuml import core
 def test_end_to_end():
 
     cluster = LocalCUDACluster(threads_per_worker=10)
-    client = Client("tcp://127.0.0.1:44367")
+    client = Client("tcp://127.0.0.1:43943")
 
     X = cudf.DataFrame([('a', np.array([0, 1, 2, 3, 4], dtype=np.float32)),
                         ('b', np.array([5, 6, 7, 7, 8], dtype=np.float32))])
