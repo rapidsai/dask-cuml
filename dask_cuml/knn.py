@@ -209,7 +209,7 @@ def build_dask_dfs(arrs, params):
     I_ddf = dask.delayed(I)
     D_ddf = dask.delayed(D)
 
-    return I_ddf, D_ddf
+    return I_ddf, D_ddf, idx
 
 
 class KNN(object):
@@ -355,16 +355,21 @@ class KNN(object):
 
         local_dfs = [f.result() for f in dfs]
 
+        # Sort delayed dfs by their starting index
+        local_dfs.sort(key = lambda x: x[2][0])
+
         print("local_ddfs=" + str(local_dfs))
 
         print(str(default_client().who_has()))
 
         print("X_divisions: "+ str(X.divisions))
 
+        print(str([f[2] for f in local_dfs]))
+
         I_ddf = dask_cudf.from_delayed(
-            [f[0] for f in local_dfs])
+            [f[0] for f in local_dfs]).persist()
         D_ddf = dask_cudf.from_delayed(
-            [f[1] for f in local_dfs])
+            [f[1] for f in local_dfs]).persist()
 
         print("DIVISIONS: " + str(I_ddf.divisions))
         return I_ddf, D_ddf
