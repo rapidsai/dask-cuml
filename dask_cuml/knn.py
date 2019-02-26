@@ -122,7 +122,7 @@ def _kneighbors_on_worker(data, m, params):
 
     #TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
-    for p, dev in ipc_dev_list:
+    for p, dev, _ in ipc_dev_list:
         for x, i, d in p:
             ipct = new_ipc_thread([x, i, d], dev)
             open_ipcs.append(ipct)
@@ -133,7 +133,7 @@ def _kneighbors_on_worker(data, m, params):
 
     print("devarrs_dev_list=" + str(devarrs_dev_list))
 
-    for p, dev in devarrs_dev_list:
+    for p, dev, _ in devarrs_dev_list:
         for X, inds, dists in p:
             alloc_info.extend([[build_alloc_info((dev, X)),
                                build_alloc_info((dev, inds)),
@@ -162,7 +162,11 @@ def input_to_device_arrays(X, params):
     :return:
     """
 
-    print("INDEX: " + str(X.index))
+    print("INDEX: " + str(X[0].index.values[0]))
+    print("INDEX: " + str(X[0].index.values[-1]))
+
+    start_idx = X[0].index.values[0]
+    stop_idx = X[0].index.values[-1]
 
     X_mat = X[0].as_gpu_matrix(order="F")
     dev = device_of_devicendarray(X_mat)
@@ -174,18 +178,18 @@ def input_to_device_arrays(X, params):
     D_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.float32, order="F"))
 
     # Return canonical device id as string
-    return [(X_mat, I_ndarr, D_ndarr)], dev
+    return [(X_mat, I_ndarr, D_ndarr)], dev, (start_idx, stop_idx)
 
 
 def get_input_ipc_handles(arr):
-    arrs, dev = arr
+    arrs, dev, idx = arr
     ret = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle())
            for X, inds, dists in arrs]
-    return ret, dev
+    return ret, dev, idx
 
 
 def build_dask_dfs(arrs, params):
-    arr, dev = arrs
+    arr, dev, idx = arrs
 
     X, I_ndarr, D_ndarr = arr[0]
 
@@ -195,10 +199,12 @@ def build_dask_dfs(arrs, params):
     I = cudf.DataFrame()
     for i in range(0, I_ndarr.shape[1]):
         I[str(i)] = I_ndarr[:, i]
+    I = I.set_index(np.arange(idx[0], idx[1]+1))
 
     D = cudf.DataFrame()
     for i in range(0, D_ndarr.shape[1]):
         D[str(i)] = D_ndarr[:, i]
+    D = D.set_index(np.arange(idx[0], idx[1]+1))
 
     I_ddf = dask_cudf.from_cudf(I, npartitions=1)
     D_ddf = dask_cudf.from_cudf(D, npartitions=1)
