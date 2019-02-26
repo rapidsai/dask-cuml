@@ -14,7 +14,6 @@ import os
 
 
 def get_visible_devices():
-
     # TODO: Shouldn't have to split on every call
     return os.environ["CUDA_VISIBLE_DEVICES"].split(",")
 

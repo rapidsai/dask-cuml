@@ -14,6 +14,8 @@
 #
 from .core import *
 
+import dask
+
 from cuml import KNN as cumlKNN
 from cuml import device_of_ptr
 
@@ -152,26 +154,56 @@ def _kneighbors_on_worker(data, m, params):
     return data
 
 
-def inputs_to_device_arrays(arr):
+def input_to_device_arrays(X, params):
     """
+    Create output arrays and return them w/ the input array(s)
     :param arr:
         A tuple in the form of (X, y)
     :return:
     """
-    mats = [(X.as_gpu_matrix(order="F"), inds.as_gpu_matrix(order="F"), dists.as_gpu_matrix(order="F"))
-            for X, inds, dists in arr]
-    dev = device_of_devicendarray(mats[0][0])
+
+    print("INDEX: " + str(X.index))
+
+    X_mat = X[0].as_gpu_matrix(order="F")
+    dev = device_of_devicendarray(X_mat)
+
+    shape = X_mat.shape[0]*params["k"]
+
+    # Create output numba arrays.
+    I_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.int64, order="F"))
+    D_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.float32, order="F"))
 
     # Return canonical device id as string
-    return mats, dev
+    return [(X_mat, I_ndarr, D_ndarr)], dev
 
 
 def get_input_ipc_handles(arr):
-
     arrs, dev = arr
-    ret = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle()) for X, inds, dists in arrs]
-
+    ret = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle())
+           for X, inds, dists in arrs]
     return ret, dev
+
+
+def build_dask_dfs(arrs, params):
+    arr, dev = arrs
+
+    X, I_ndarr, D_ndarr = arr[0]
+
+    I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
+    D_ndarr = D_ndarr.reshape((X.shape[0], params["k"]))
+
+    I = cudf.DataFrame()
+    for i in range(0, I_ndarr.shape[1]):
+        I[str(i)] = I_ndarr[:, i]
+
+    D = cudf.DataFrame()
+    for i in range(0, D_ndarr.shape[1]):
+        D[str(i)] = D_ndarr[:, i]
+
+    I_ddf = dask_cudf.from_cudf(I, npartitions=1)
+    D_ddf = dask_cudf.from_cudf(D, npartitions=1)
+
+    return I_ddf, D_ddf
 
 
 class KNN(object):
@@ -239,49 +271,11 @@ class KNN(object):
 
         client = default_client()
 
-        # We need to replicate the divisions of the X dataframe and
-        # create indices and distances matrices
-        div = list(X.divisions)
-        div[-1] += 1
-
-        # loop through divisions, creating 2 new cudfs (1 for indices, one for dists)
-
-        index_dfs = []
-        dist_dfs = []
-
-        print("META: " + str(X._meta))
-
-        print("Divisions: "+ str(X.divisions))
-
-        for i in range(1, len(div)):
-
-            size = div[i]-div[i-1]
-
-            # Create a cudfs of size (N, k)
-            ind_df = cudf.DataFrame({str(j): np.zeros(size, dtype=np.int64, order="F")
-                                     for j in range(k)})
-            dist_df = cudf.DataFrame({str(j): np.zeros(size, dtype=np.float32, order="F")
-                                      for j in range(k)})
-
-            i_df = dask_cudf.from_cudf(ind_df, npartitions=1)
-            index_dfs.append(i_df)
-
-            d_df = dask_cudf.from_cudf(dist_df, npartitions=1)
-            dist_dfs.append(d_df)
-
-        final_ind_df = dask_cudf.core.stack_partitions(index_dfs, X.divisions).persist()
-        final_dist_df = dask_cudf.core.stack_partitions(dist_dfs, X.divisions).persist()
-
-        yield wait(final_ind_df)
-        yield wait(final_dist_df)
-
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X.to_delayed()
-        dist_parts = final_dist_df.to_delayed()
-        ind_parts = final_ind_df.to_delayed()
 
         # Arrange parts into pairs.  This enforces co-locality
-        parts = list(map(delayed, zip(data_parts, dist_parts, ind_parts)))
+        parts = list(map(delayed, data_parts))
         parts = client.compute(parts)  # Start computation in the background
         yield wait(parts)
 
@@ -304,9 +298,8 @@ class KNN(object):
         """
         Create IP Handles on each worker hosting input data
         """
-
         # Format of input_devarrays = ([(X, y)..], dev)
-        input_devarrays = [(worker, client.submit(inputs_to_device_arrays, part, workers=[worker]))
+        input_devarrays = [(worker, client.submit(input_to_device_arrays, part, {"k":k}, workers=[worker]))
                     for worker, part in worker_parts.items()]
 
         yield wait(input_devarrays)
@@ -328,11 +321,14 @@ class KNN(object):
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
 
-        ret = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
+        run = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
+        yield wait(run)
 
-        yield wait(ret)
+        dfs = [client.submit(build_dask_dfs, f, {"k": k}, workers=[worker])
+               for worker, f in input_devarrays]
+        yield wait(dfs)
 
-        return gen.Return((final_ind_df, final_dist_df))
+        return gen.Return(dfs)
 
     def kneighbors(self, X, k):
 
@@ -349,8 +345,23 @@ class KNN(object):
         :return:
             dists and indices of the k-nearest neighbors to the input vectors
         """
-        return default_client().sync(self._kneighbors, X, k).value
+        dfs = default_client().sync(self._kneighbors, X, k).value
 
+        local_dfs = [f.result() for f in dfs]
+
+        print("local_ddfs=" + str(local_dfs))
+
+        print(str(default_client().who_has()))
+
+        print("X_divisions: "+ str(X.divisions))
+
+        I_ddf = dask_cudf.core.stack_partitions(
+            [f[0] for f in local_dfs], X.divisions)
+        D_ddf = dask_cudf.core.stack_partitions(
+            [f[1] for f in local_dfs], X.divisions)
+
+        print("DIVISIONS: " + str(I_ddf.divisions))
+        return I_ddf, D_ddf
 
 
     def get(self, indices):
