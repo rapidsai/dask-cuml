@@ -2,52 +2,67 @@ import pytest
 
 import logging
 
+import time
+
 from dask.distributed import Client, wait
 from dask_cuda import LocalCUDACluster
-import dask
-import dask_cudf
-
-import cudf
-import numba.cuda as cuda
-import numpy as np
-
-from tornado import gen
-
-import pandas.testing
-
-from dask_cuml import knn as cumlKNN
-from dask_cuml import core
 
 def test_end_to_end():
 
-    cluster = LocalCUDACluster(threads_per_worker=10)
+    cluster = LocalCUDACluster(threads_per_worker=1)
     client = Client(cluster)
 
+    import dask
+    import dask_cudf
+
+    import pandas as pd
+
+    import cudf
+    import numpy as np
+
+    import pandas.testing
+
+    from dask_cuml import knn as cumlKNN
 
     def create_df(n):
-        ret = cudf.DataFrame([(str(i), np.random.uniform(-1, 1, 25).astype(np.float32))
-                            for i in range(5)])
-
+        X = np.random.rand(620000, 1000)
+        ret = cudf.DataFrame([(i,X[:,i].astype(np.float32)) for i in range(X.shape[1])])
 
         return ret
 
-    dfs = [client.submit(create_df, n) for n in range(10)]
+    workers = client.has_what().keys()
 
-    print(str(dfs))
+    start = time.time()
 
-    X_df = dask_cudf.from_delayed(dfs).persist()
+    dfs = [client.submit(create_df, n, workers = [worker])
+           for worker, n in zip(workers, range(len(cluster.workers)))]
+    wait(dfs)
 
-    print(str(client.who_has()))
+    end = time.time() - start
 
-    print("X: " + str(X_df.compute()))
+    print("Creating data took " + str(end))
+
+    start = time.time()
+
+    X_df = dask_cudf.from_delayed(dfs)
+
+    end = time.time() - start
+
+    print("Creating dataframe took " + str(end))
 
     lr = cumlKNN.KNN()
+
+    start = time.time()
     lr.fit(X_df)
+    end = time.time() - start
 
-    I, D = lr.kneighbors(X_df, 2)
+    print("Fitting data took: "+ str(end))
 
-    print("D: " + str(D.compute()))
-    print("I: " + str(I.compute()))
+    start = time.time()
+    I, D = lr.kneighbors(X_df[0:50], 15)
+    end = time.time() - start
+    print("Searching data took " + str(end))
+
 
     assert(0==1)
 
