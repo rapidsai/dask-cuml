@@ -59,7 +59,7 @@ def to_gpu_matrix(df):
 
     except Exception as e:
         import traceback
-        logging.error("Error in to_gpu_matrix(dev=" + str(dev) + "): " + str(e))
+        logging.error("Error in to_gpu_matrix(" + str(e))
         traceback.print_exc()
         pass
 
@@ -186,10 +186,19 @@ def build_dask_dfs(arrs, params):
         D[str(i)] = D_ndarr[:, i]
     D = D.set_index(np.arange(idx[0], idx[1]+1))
 
-    I_ddf = dask.delayed(I)
-    D_ddf = dask.delayed(D)
+    return I, D, idx
 
-    return I_ddf, D_ddf, idx
+
+def get_idx(arrs):
+    return arrs[2]
+
+
+def get_I(arrs):
+    return arrs[0]
+
+
+def get_D(arrs):
+    return arrs[1]
 
 
 class KNN(object):
@@ -252,6 +261,7 @@ class KNN(object):
         # The model on each unique host is held for futures queries
         self.model = f
 
+
     @gen.coroutine
     def _kneighbors(self, X, k):
 
@@ -260,11 +270,9 @@ class KNN(object):
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X.to_delayed()
 
-        # Arrange parts into pairs.  This enforces co-locality
         parts = list(map(delayed, data_parts))
         parts = client.compute(parts)  # Start computation in the background
         yield wait(parts)
-
         for part in parts:
             if part.status == 'error':
                 yield part  # trigger error locally
@@ -331,17 +339,21 @@ class KNN(object):
         :return:
             dists and indices of the k-nearest neighbors to the input vectors
         """
-        dfs = default_client().sync(self._kneighbors, X, k).value
 
-        local_dfs = [f.result() for f in dfs]
+        client = default_client()
+        dfs = client.sync(self._kneighbors, X, k).value
+
+        local_divs = [client.submit(get_idx, f).result() for f in dfs]
+        indices = [client.submit(get_I, f) for f in dfs]
+        dists = [client.submit(get_D, f) for f in dfs]
+
+        dfs_divs = list(zip(local_divs, indices, dists))
 
         # Sort delayed dfs by their starting index
-        local_dfs.sort(key = lambda x: x[2][0])
+        dfs_divs.sort(key = lambda x: x[0][0])
 
-        I_ddf = dask_cudf.from_delayed(
-            [f[0] for f in local_dfs]).persist()
-        D_ddf = dask_cudf.from_delayed(
-            [f[1] for f in local_dfs]).persist()
+        I_ddf = dask_cudf.from_delayed(indices)
+        D_ddf = dask_cudf.from_delayed(dists)
 
         return I_ddf, D_ddf
 
