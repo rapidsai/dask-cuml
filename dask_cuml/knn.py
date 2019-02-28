@@ -53,9 +53,14 @@ import numba.cuda
 def to_gpu_matrix(df):
 
     try:
+
+        print("Getting indexes")
+        start_idx = df.index[0]
+        stop_idx = df.index[-1]
+        print("done.")
         gpu_matrix = df.as_gpu_matrix(order='F')
         dev = device_of_devicendarray(gpu_matrix)
-        return dev, gpu_matrix
+        return dev, gpu_matrix, (start_idx, stop_idx)
 
     except Exception as e:
         import traceback
@@ -65,16 +70,16 @@ def to_gpu_matrix(df):
 
 
 def build_alloc_info(data):
-    dev, gpu_matrix = data
+    dev, gpu_matrix, _ = data
     return gpu_matrix.__cuda_array_interface__
 
 
 def get_ipc_handle(data):
-    dev, gpu_matrix = data
+    dev, gpu_matrix, idx = data
 
     try:
         in_handle = gpu_matrix.get_ipc_handle()
-        return dev, in_handle
+        return dev, in_handle, idx
     except Exception as e:
         import traceback
         logging.error("Error in get_ipc_handles(dev=" + str(dev) + "): " + str(e))
@@ -92,18 +97,37 @@ def _fit_on_worker(data, params):
     # number of threads to O(len(devices)) and want to avoid having if be O(len(ipcs))
     # at all costs!
     device_handle_map = defaultdict(list)
-    [device_handle_map[dev].append(ipc) for dev, ipc in ipcs]
+    [device_handle_map[dev].append((idx, ipc)) for dev, ipc, idx in ipcs]
 
-    open_ipcs = [new_ipc_thread(ipcs, dev) for dev, ipcs in device_handle_map.items()]
+    print("device_handle_map=" + str(device_handle_map))
 
-    alloc_info = list(itertools.chain(*[t.info() for t in open_ipcs]))
-    alloc_info.extend([build_alloc_info(t) for t in raw_arrs])
+    open_ipcs = [([i[0] for i in ipcs], new_ipc_thread([i[1] for i in ipcs], dev))
+                 for dev, ipcs in device_handle_map.items()]
+
+    print("open_ips=" + str(open_ipcs))
+    alloc_info = []
+    for idxs, t in open_ipcs:
+        inf = t.info()
+        for i in range(len(idxs)):
+            alloc_info.append([idxs[i], inf[i]])
+
+    alloc_info.extend([[t[2], build_alloc_info(t)] for t in raw_arrs])
+
+    print("alloc_info=" + str(alloc_info))
+
+    print(str([x[0][0] for x in alloc_info]))
+
+    alloc_info.sort(key = lambda x: x[0][0])
+
+    final_allocs = [a for i, a in alloc_info]
+
+    print("final_allocs=" + str(final_allocs))
 
     m = cumlKNN(should_downcast = params["should_downcast"])
-    m._fit_mg(params["D"], alloc_info)
+    m._fit_mg(params["D"], final_allocs)
 
-    [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    [t[1].close() for t in open_ipcs]
+    [t[1].join() for t in open_ipcs]
 
     return m
 
@@ -112,27 +136,55 @@ def _kneighbors_on_worker(data, m, params):
 
     ipc_dev_list, devarrs_dev_list = data
 
-    #TODO: One ipc thread per device instead of per x,y,coef tuple
-    open_ipcs = []
-    for p, dev, _ in ipc_dev_list:
-        for x, i, d in p:
-            ipct = new_ipc_thread([x, i, d], dev)
-            open_ipcs.append(ipct)
+    device_handle_map = defaultdict(list)
 
-    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
+    ipc_dev_list = list(filter(None, ipc_dev_list))
+    devarrs_dev_list = list(filter(None, devarrs_dev_list))
 
-    for p, dev, _ in devarrs_dev_list:
+    print("ipc_dev_list=" + str(ipc_dev_list))
+    print("devarrs_dev_list=" + str(devarrs_dev_list))
+
+    # Each ipc contains X, I, D handles
+    [device_handle_map[dev].append((idx, ipc)) for ipc, dev, idx in ipc_dev_list]
+
+    def collect_ipcs(ipcs):
+        final = []
+        for ipc in ipcs:
+            for i in ipc:
+                for j in i:
+                    final.append(j)
+
+        print("FINAL: " + str(final))
+
+        return final
+
+    open_ipcs = [([i[0] for i in idx_ipcs], new_ipc_thread(collect_ipcs([i[1] for i in idx_ipcs]), dev))
+                 for dev, idx_ipcs in device_handle_map.items()]
+
+    print("open_ipcs=" + str(open_ipcs))
+
+    alloc_info = []
+    for idxs, t in open_ipcs:
+        inf = t.info()
+        for i in range(len(idxs)):
+            alloc_info.append((idxs[i], inf[i*3:(i*3)+3]))
+
+    for p, dev, idx in devarrs_dev_list:
         for X, inds, dists in p:
-            alloc_info.extend([[build_alloc_info((dev, X)),
-                               build_alloc_info((dev, inds)),
-                               build_alloc_info((dev, dists))]])
+            alloc_info.extend([(idx, [build_alloc_info((dev, X, idx)),
+                                     build_alloc_info((dev, inds, idx)),
+                                     build_alloc_info((dev, dists, idx))])])
 
-    for alloc in alloc_info:
-        X, inds, dists = alloc
+    print("alloc_info=" + str(alloc_info))
+
+    alloc_info.sort(key = lambda x: x[0][0])
+
+    for idx, allocs in alloc_info:
+        X, inds, dists = allocs
         m._query(X["data"][0], X["shape"][0], params["k"], inds["data"][0], dists["data"][0])
 
-    [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    [t.close() for idx, t in open_ipcs]
+    [t.join() for idx, t in open_ipcs]
 
     return data
 
@@ -145,8 +197,12 @@ def input_to_device_arrays(X, params):
     :return:
     """
 
-    start_idx = X[0].index.values[0]
-    stop_idx = X[0].index.values[-1]
+    if len(X[0]) == 0:
+        return None
+    start_idx = X[0].index[0]
+    stop_idx = X[0].index[-1]
+
+    print("start_idx=" + str(start_idx))
 
     X_mat = X[0].as_gpu_matrix(order="F")
     dev = device_of_devicendarray(X_mat)
@@ -162,29 +218,49 @@ def input_to_device_arrays(X, params):
 
 
 def get_input_ipc_handles(arr):
+
+    if arr is None:
+        return None
+
     arrs, dev, idx = arr
-    ret = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle())
+    mat = [(X.get_ipc_handle(), inds.get_ipc_handle(), dists.get_ipc_handle())
            for X, inds, dists in arrs]
-    return ret, dev, idx
+    return mat, dev, idx
 
 
 def build_dask_dfs(arrs, params):
+
+    if arrs is None:
+        return None
+
     arr, dev, idx = arrs
 
+    print("Building outputs")
+
+    print("Fetching arr")
     X, I_ndarr, D_ndarr = arr[0]
+
+
+    print("Reshaping arrs")
 
     I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
     D_ndarr = D_ndarr.reshape((X.shape[0], params["k"]))
 
-    I = cudf.DataFrame()
-    for i in range(0, I_ndarr.shape[1]):
-        I[str(i)] = I_ndarr[:, i]
-    I = I.set_index(np.arange(idx[0], idx[1]+1))
 
-    D = cudf.DataFrame()
-    for i in range(0, D_ndarr.shape[1]):
+    print("Creating cudfs")
+
+    I = cudf.DataFrame(index = cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
+    D = cudf.DataFrame(index = cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
+
+    print("Transposing results")
+
+    for i in range(0, params["k"]):
+        I[str(i)] = I_ndarr[:, i]
+
+    for i in range(0, params["k"]):
         D[str(i)] = D_ndarr[:, i]
-    D = D.set_index(np.arange(idx[0], idx[1]+1))
+
+    print("Returning outputs")
 
     return I, D, idx
 
@@ -199,6 +275,14 @@ def get_I(arrs):
 
 def get_D(arrs):
     return arrs[1]
+
+
+def get_I_meta(arrs):
+    return arrs[0].iloc[:0]
+
+
+def get_D_meta(arrs):
+    return arrs[1].iloc[:0]
 
 
 class KNN(object):
@@ -294,7 +378,7 @@ class KNN(object):
         """
         # Format of input_devarrays = ([(X, y)..], dev)
         input_devarrays = [(worker, client.submit(input_to_device_arrays, part, {"k":k}, workers=[worker]))
-                    for worker, part in worker_parts.items()]
+                            for worker, part in worker_parts.items()]
 
         yield wait(input_devarrays)
 
@@ -315,12 +399,19 @@ class KNN(object):
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
 
-        run = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k":k}, workers=[exec_node])
+        print("Running kneighbors()")
+        run = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k": k}, workers=[exec_node])
         yield wait(run)
+
+        print("Done.")
+
+        print("Building dfs")
 
         dfs = [client.submit(build_dask_dfs, f, {"k": k}, workers=[worker])
                for worker, f in input_devarrays]
         yield wait(dfs)
+
+        print("Done.")
 
         return gen.Return(dfs)
 
@@ -343,6 +434,8 @@ class KNN(object):
         client = default_client()
         dfs = client.sync(self._kneighbors, X, k).value
 
+        dfs = [d for d in dfs if d.type != type(None)]
+
         local_divs = [client.submit(get_idx, f).result() for f in dfs]
         indices = [client.submit(get_I, f) for f in dfs]
         dists = [client.submit(get_D, f) for f in dfs]
@@ -352,8 +445,11 @@ class KNN(object):
         # Sort delayed dfs by their starting index
         dfs_divs.sort(key = lambda x: x[0][0])
 
-        I_ddf = dask_cudf.from_delayed(indices)
-        D_ddf = dask_cudf.from_delayed(dists)
+        I_meta = client.submit(get_I_meta, dfs[0]).result()
+        D_meta = client.submit(get_D_meta, dfs[0]).result()
+
+        I_ddf = dask_cudf.from_delayed(indices, meta = I_meta)
+        D_ddf = dask_cudf.from_delayed(dists, meta = D_meta)
 
         return I_ddf, D_ddf
 
@@ -391,10 +487,16 @@ class KNN(object):
         client = default_client()
 
         if isinstance(ddf, dd.DataFrame):
+
+            print("Getting cols")
             cols = len(ddf.columns)
+
+            print("Done.")
             parts = ddf.to_delayed()
             parts = client.compute(parts)
             yield wait(parts)
+
+            print("Done compute.")
         else:
             raise Exception("Input should be a Dask DataFrame")
 

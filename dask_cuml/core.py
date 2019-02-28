@@ -47,6 +47,8 @@ class IPCThread(Thread):
 
         self.lock = Lock()
 
+
+
         self.ipcs = ipcs
 
         # Use canonical device id
