@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-from .core import *
+from dask_cuml.core import *
 
 import dask
 
@@ -339,7 +339,7 @@ def get_D_meta(arrs):
     return arrs[1].iloc[:0]
 
 
-class KNN(object):
+class NearestNeighbors(object):
     """
     Data-parallel Multi-Node Multi-GPU kNN Model.
 

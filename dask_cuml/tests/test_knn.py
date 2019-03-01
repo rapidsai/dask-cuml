@@ -1,9 +1,3 @@
-import pytest
-
-import logging
-
-import time
-
 from sklearn.neighbors import NearestNeighbors
 
 from dask.distributed import Client, wait
@@ -17,17 +11,12 @@ def test_end_to_end():
     # NOTE: The LocalCUDACluster needs to be started before any imports that
     # could potentially create a CUDA context.
 
-    import dask
     import dask_cudf
-
-    import pandas as pd
 
     import cudf
     import numpy as np
 
-    import pandas.testing
-
-    from dask_cuml import knn as cumlKNN
+    from dask_cuml.neighbors import nearest_neighbors as cumlKNN
 
     def create_df(f, m, n):
         X = np.random.rand(m, n)

@@ -29,7 +29,8 @@ install_requires = [
 ]
 
 packages = ["dask_cuml",
-            "dask_cuml.tests"]
+            "dask_cuml.tests",
+            "dask_cuml.neighbors"]
 
 
 setup(name = "dask_cuml",
