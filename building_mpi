@@ -1,7 +1,0 @@
-Building UCX with:
-./configure --prefix=/usr --enable-mt --with-cuda=/usr/local/cuda --with-gdrcopy=/usr
-make -j install
-
-
-
-mpirun --mca btl_base_verbose 100 --mca pml ob1 --mca osc ^ucx -np 2 dask-mpi --no-nanny --no-scheduler --nthreads 1 --scheduler-file cluster.json
