@@ -1,4 +1,4 @@
-# Copyright (c) 2018, NVIDIA CORPORATION.
+# Copyright (c) 2019, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,13 +53,17 @@ import numba.cuda
 
 
 def to_gpu_matrix(df):
+    """
+    Turn input cudf into a Numba array. Returns device
+    of current worker and the start/stop indexes
+    of the cudf.
+    :param df:
+    :return:
+    """
 
     try:
-
-        print("Getting indexes")
         start_idx = df.index[0]
         stop_idx = df.index[-1]
-        print("done.")
         gpu_matrix = numba_utils.row_matrix(df)
         dev = device_of_devicendarray(gpu_matrix)
         return dev, gpu_matrix, (start_idx, stop_idx)
@@ -72,11 +76,24 @@ def to_gpu_matrix(df):
 
 
 def build_alloc_info(data):
+    """
+    Use the __cuda_array_interface__ to extract cpointer
+    information for passing into cython.
+    :param data:
+    :return:
+    """
     dev, gpu_matrix, _ = data
     return gpu_matrix.__cuda_array_interface__
 
 
 def get_ipc_handle(data):
+    """
+    Extract IPC handles from input Numba array. Pass
+    along the device of the current worker and the
+    start/stop indices from the original cudf.
+    :param data:
+    :return:
+    """
     dev, gpu_matrix, idx = data
 
     try:
@@ -91,6 +108,16 @@ def get_ipc_handle(data):
 
 # Run on a single worker on each unique host
 def _fit_on_worker(data, params):
+    """
+    For SPMG kNN, this is the function that runs on a
+    chosen worker, collects all the IPC handles from
+    the other workers, and makes the cython call to
+    the cuML kNN multiGPU fit() function.
+    :param data:
+    :param params:
+    :return:
+    """
+
     ipcs, raw_arrs = data
 
     # Separate threads to hold pointers to separate devices
@@ -101,12 +128,9 @@ def _fit_on_worker(data, params):
     device_handle_map = defaultdict(list)
     [device_handle_map[dev].append((idx, ipc)) for dev, ipc, idx in ipcs]
 
-    print("device_handle_map=" + str(device_handle_map))
-
     open_ipcs = [([i[0] for i in ipcs], new_ipc_thread([i[1] for i in ipcs], dev))
                  for dev, ipcs in device_handle_map.items()]
 
-    print("open_ips=" + str(open_ipcs))
     alloc_info = []
     for idxs, t in open_ipcs:
         inf = t.info()
@@ -114,16 +138,9 @@ def _fit_on_worker(data, params):
             alloc_info.append([idxs[i], inf[i]])
 
     alloc_info.extend([[t[2], build_alloc_info(t)] for t in raw_arrs])
-
-    print("alloc_info=" + str(alloc_info))
-
-    print(str([x[0][0] for x in alloc_info]))
-
     alloc_info.sort(key = lambda x: x[0][0])
 
     final_allocs = [a for i, a in alloc_info]
-
-    print("final_allocs=" + str(final_allocs))
 
     m = cumlKNN(should_downcast = params["should_downcast"])
     m._fit_mg(params["D"], final_allocs)
@@ -135,6 +152,16 @@ def _fit_on_worker(data, params):
 
 
 def _kneighbors_on_worker(data, m, params):
+    """
+    For SPMG kNN, this is the function that runs on
+    a chosen worker, collects all the IPC handles from
+    the other workers, and makes the cython call to
+    the cuML kNN multiGPU kneighbors() function.
+    :param data:
+    :param m:
+    :param params:
+    :return:
+    """
 
     ipc_dev_list, devarrs_dev_list = data
 
@@ -143,27 +170,26 @@ def _kneighbors_on_worker(data, m, params):
     ipc_dev_list = list(filter(None, ipc_dev_list))
     devarrs_dev_list = list(filter(None, devarrs_dev_list))
 
-    print("ipc_dev_list=" + str(ipc_dev_list))
-    print("devarrs_dev_list=" + str(devarrs_dev_list))
-
     # Each ipc contains X, I, D handles
     [device_handle_map[dev].append((idx, ipc)) for ipc, dev, idx in ipc_dev_list]
 
     def collect_ipcs(ipcs):
+        """
+        A simple helper function to flat map a deeply
+        nested list of ipc handles.
+        :param ipcs:
+        :return:
+        """
         final = []
         for ipc in ipcs:
             for i in ipc:
                 for j in i:
                     final.append(j)
 
-        print("FINAL: " + str(final))
-
         return final
 
     open_ipcs = [([i[0] for i in idx_ipcs], new_ipc_thread(collect_ipcs([i[1] for i in idx_ipcs]), dev))
                  for dev, idx_ipcs in device_handle_map.items()]
-
-    print("open_ipcs=" + str(open_ipcs))
 
     alloc_info = []
     for idxs, t in open_ipcs:
@@ -176,8 +202,6 @@ def _kneighbors_on_worker(data, m, params):
             alloc_info.extend([(idx, [build_alloc_info((dev, X, idx)),
                                      build_alloc_info((dev, inds, idx)),
                                      build_alloc_info((dev, dists, idx))])])
-
-    print("alloc_info=" + str(alloc_info))
 
     alloc_info.sort(key = lambda x: x[0][0])
 
@@ -219,7 +243,14 @@ def input_to_device_arrays(X, params):
 
 
 def get_input_ipc_handles(arr):
-
+    """
+    Used for kneighbors() to extract the IPC handles from
+    the input Numba arrays. The device of the current worker
+    and the start/stop indices of the original cudf are
+    passed along as well.
+    :param arr:
+    :return:
+    """
     if arr is None:
         return None
 
@@ -230,6 +261,14 @@ def get_input_ipc_handles(arr):
 
 
 def build_dask_dfs(arrs, params):
+    """
+    Convert Numba arrays for kneighbors() resulting
+    indices and distances into cudf Dataframes, using
+    the start/stop indices from dataframe X.
+    :param arrs:
+    :param params:
+    :return:
+    """
 
     if arrs is None:
         return None
@@ -254,22 +293,49 @@ def build_dask_dfs(arrs, params):
 
 
 def get_idx(arrs):
+    """
+    Extract and return the start/stop
+    indices from original cudf.
+    :param arrs:
+    :return:
+    """
     return arrs[2]
 
-
 def get_I(arrs):
+    """
+    Extract and return the indices cudf
+    :param arrs:
+    :return:
+    """
     return arrs[0]
 
 
 def get_D(arrs):
+    """
+    Extract and return the dists cudf
+    :param arrs:
+    :return:
+    """
     return arrs[1]
 
 
 def get_I_meta(arrs):
+    """
+    Extract and return the metadata
+    from the indices cudf.
+    :param arrs:
+    :return:
+    """
     return arrs[0].iloc[:0]
 
 
 def get_D_meta(arrs):
+    """
+    Extract and return the metadata
+    from the dists cudf.
+    :param arrs:
+    :return:
+    """
     return arrs[1].iloc[:0]
 
 
@@ -277,12 +343,10 @@ class KNN(object):
     """
     Data-parallel Multi-Node Multi-GPU kNN Model.
 
-    Data is spread across Dask workers using Dask cuDF. On each unique host, a single worker is chosen to creates
-    a series of kNN indices, one for each chunk of the Dask input, across devices on that host. Each unique hostname
-    is assigned a monotonically increasing identifier, which is used as a multiplier for the resulting kNN indices
-    across hosts so that the global index matrix, returned from queries, will reflect the global order.
+    Data is spread across Dask workers using Dask cuDF. A single worker is chosen to create a series of kNN indices,
+    one for each chunk of the Dask input, across the devices on that host. Results will reflect the global order,
+    extracted from the Dask cuDF used for training.
     """
-
     def __init__(self, should_downcast = False):
         self.model = None
         self.master_host = None
@@ -290,7 +354,7 @@ class KNN(object):
 
     def fit(self, ddf):
         """
-        Fits a multi-node multi-gpu knn model, each node using their own index structure underneath.
+        Fits a single-node multi-gpu knn model using single process-multiGPU technique.
         :param futures:
         :return:
         """
@@ -335,7 +399,12 @@ class KNN(object):
 
     @gen.coroutine
     def _kneighbors(self, X, k):
-
+        """
+        Internal function to query the kNN model.
+        :param X:
+        :param k:
+        :return:
+        """
         client = default_client()
 
         # Break apart Dask.array/dataframe into chunks/parts
@@ -422,8 +491,6 @@ class KNN(object):
 
         dfs_divs = list(zip(local_divs, indices, dists))
 
-        print("SORT: "+ str(dfs_divs))
-
         # Sort delayed dfs by their starting index
         dfs_divs.sort(key = lambda x: x[0][0])
 
@@ -446,7 +513,13 @@ class KNN(object):
 
     @staticmethod
     def _build_host_dict(gpu_futures, client):
-
+        """
+        Helper function to build a dictionary mapping workers to parts
+        that currently hold the parts of given futures.
+        :param gpu_futures:
+        :param client:
+        :return:
+        """
         who_has = client.who_has(gpu_futures)
 
         key_to_host_dict = {}
@@ -465,6 +538,14 @@ class KNN(object):
 
     @gen.coroutine
     def _get_mg_info(self, ddf):
+        """
+        Given a Dask cuDF, extract number of dimensions and convert
+        the pieces of the Dask cuDF into Numba arrays, which can
+        be passed into the kNN algorithm.
+        build a
+        :param ddf:
+        :return:
+        """
 
         client = default_client()
 
