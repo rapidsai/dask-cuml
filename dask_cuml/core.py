@@ -47,6 +47,7 @@ def get_device_id(canonical_name):
 
     return -1
 
+
 class IPCThread(Thread):
     """
     This mechanism gets around Numba's restriction of CUDA contexts being thread-local
@@ -60,9 +61,6 @@ class IPCThread(Thread):
         Thread.__init__(self)
 
         self.lock = Lock()
-
-
-
         self.ipcs = ipcs
 
         # Use canonical device id
