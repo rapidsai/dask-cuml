@@ -23,6 +23,8 @@ import logging
 
 import random
 
+from cuml import numba_utils
+
 import itertools
 
 
@@ -58,7 +60,7 @@ def to_gpu_matrix(df):
         start_idx = df.index[0]
         stop_idx = df.index[-1]
         print("done.")
-        gpu_matrix = df.as_gpu_matrix(order='F')
+        gpu_matrix = numba_utils.row_matrix(df)
         dev = device_of_devicendarray(gpu_matrix)
         return dev, gpu_matrix, (start_idx, stop_idx)
 
@@ -199,19 +201,18 @@ def input_to_device_arrays(X, params):
 
     if len(X[0]) == 0:
         return None
+
     start_idx = X[0].index[0]
     stop_idx = X[0].index[-1]
 
-    print("start_idx=" + str(start_idx))
-
-    X_mat = X[0].as_gpu_matrix(order="F")
+    X_mat = numba_utils.row_matrix(X[0])
     dev = device_of_devicendarray(X_mat)
 
     shape = X_mat.shape[0]*params["k"]
 
     # Create output numba arrays.
-    I_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.int64, order="F"))
-    D_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.float32, order="F"))
+    I_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.int64, order="C"))
+    D_ndarr = numba.cuda.to_device(np.zeros(shape, dtype=np.float32, order="C"))
 
     # Return canonical device id as string
     return [(X_mat, I_ndarr, D_ndarr)], dev, (start_idx, stop_idx)
@@ -235,32 +236,19 @@ def build_dask_dfs(arrs, params):
 
     arr, dev, idx = arrs
 
-    print("Building outputs")
-
-    print("Fetching arr")
     X, I_ndarr, D_ndarr = arr[0]
-
-
-    print("Reshaping arrs")
 
     I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
     D_ndarr = D_ndarr.reshape((X.shape[0], params["k"]))
 
-
-    print("Creating cudfs")
-
     I = cudf.DataFrame(index = cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
     D = cudf.DataFrame(index = cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
-
-    print("Transposing results")
 
     for i in range(0, params["k"]):
         I[str(i)] = I_ndarr[:, i]
 
     for i in range(0, params["k"]):
         D[str(i)] = D_ndarr[:, i]
-
-    print("Returning outputs")
 
     return I, D, idx
 
@@ -345,7 +333,6 @@ class KNN(object):
         # The model on each unique host is held for futures queries
         self.model = f
 
-
     @gen.coroutine
     def _kneighbors(self, X, k):
 
@@ -399,19 +386,12 @@ class KNN(object):
         # IPC Handles are loaded in separate threads on worker so they can be
         # used to make calls through cython
 
-        print("Running kneighbors()")
         run = client.submit(_kneighbors_on_worker, (ipc_handles, raw_arrays), model, {"k": k}, workers=[exec_node])
         yield wait(run)
-
-        print("Done.")
-
-        print("Building dfs")
 
         dfs = [client.submit(build_dask_dfs, f, {"k": k}, workers=[worker])
                for worker, f in input_devarrays]
         yield wait(dfs)
-
-        print("Done.")
 
         return gen.Return(dfs)
 
@@ -441,6 +421,8 @@ class KNN(object):
         dists = [client.submit(get_D, f) for f in dfs]
 
         dfs_divs = list(zip(local_divs, indices, dists))
+
+        print("SORT: "+ str(dfs_divs))
 
         # Sort delayed dfs by their starting index
         dfs_divs.sort(key = lambda x: x[0][0])
@@ -487,16 +469,10 @@ class KNN(object):
         client = default_client()
 
         if isinstance(ddf, dd.DataFrame):
-
-            print("Getting cols")
             cols = len(ddf.columns)
-
-            print("Done.")
             parts = ddf.to_delayed()
             parts = client.compute(parts)
             yield wait(parts)
-
-            print("Done compute.")
         else:
             raise Exception("Input should be a Dask DataFrame")
 
