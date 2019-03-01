@@ -17,6 +17,8 @@ from dask.distributed import wait, default_client
 
 import cuml
 
+from cuml.utils import device_of_gpu_matrix
+
 import logging
 import numba.cuda
 import random
@@ -33,7 +35,7 @@ def get_visible_devices():
 
 
 def device_of_devicendarray(devicendarray):
-    dev = cuml.utils.pointer_utils.device_of_gpu_matrix(devicendarray)
+    dev = device_of_gpu_matrix(devicendarray)
     return get_visible_devices()[dev]
 
 

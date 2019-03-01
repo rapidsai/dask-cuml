@@ -16,7 +16,7 @@ def test_end_to_end():
     import cudf
     import numpy as np
 
-    from dask_cuml.neighbors import nearest_neighbors as cumlKNN
+    from dask_cuml.neighbors import NearestNeighbors as cumlKNN
 
     def create_df(f, m, n):
         X = np.random.rand(m, n)
@@ -49,7 +49,7 @@ def test_end_to_end():
     X_df = dask_cudf.from_delayed(dfs, meta=meta)
     X_pd = X_df.compute().to_pandas()
 
-    cumlNN = cumlKNN.KNN()
+    cumlNN = cumlKNN()
     cumlNN.fit(X_df)
 
     sklNN = NearestNeighbors(metric = "sqeuclidean")

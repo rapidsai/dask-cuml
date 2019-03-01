@@ -17,7 +17,6 @@ from dask_cuml.core import *
 import dask
 
 from cuml.neighbors import NearestNeighbors as cumlKNN
-from cuml import device_of_ptr
 
 import logging
 
