@@ -33,7 +33,7 @@ def get_visible_devices():
 
 
 def device_of_devicendarray(devicendarray):
-    dev = cuml.device_of_ptr(devicendarray)
+    dev = cuml.utils.pointer_utils.device_of_gpu_matrix(devicendarray)
     return get_visible_devices()[dev]
 
 

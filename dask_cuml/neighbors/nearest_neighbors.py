@@ -16,7 +16,7 @@ from dask_cuml.core import *
 
 import dask
 
-from cuml import KNN as cumlKNN
+from cuml.neighbors import NearestNeighbors as cumlKNN
 from cuml import device_of_ptr
 
 import logging
@@ -207,7 +207,7 @@ def _kneighbors_on_worker(data, m, params):
 
     for idx, allocs in alloc_info:
         X, inds, dists = allocs
-        m._query(X["data"][0], X["shape"][0], params["k"], inds["data"][0], dists["data"][0])
+        m._kneighbors(X["data"][0], X["shape"][0], params["k"], inds["data"][0], dists["data"][0])
 
     [t.close() for idx, t in open_ipcs]
     [t.join() for idx, t in open_ipcs]
