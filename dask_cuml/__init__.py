@@ -20,8 +20,6 @@ __version__ = get_versions()['version']
 del get_versions
 
 __all__ = [
-    "mean",
+    "knn",
     "core",
-    "linear_regression"
-
 ]
