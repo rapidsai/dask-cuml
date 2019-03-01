@@ -500,7 +500,7 @@ class KNN(object):
         I_ddf = dask_cudf.from_delayed(indices, meta = I_meta)
         D_ddf = dask_cudf.from_delayed(dists, meta = D_meta)
 
-        return I_ddf, D_ddf
+        return D_ddf, I_ddf
 
 
     def get(self, indices):
