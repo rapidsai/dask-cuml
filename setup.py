@@ -23,9 +23,9 @@ import versioneer
 install_requires = [
   'numpy',
   'dask',
-  # TODO: 'cuml',
-  # TODO: 'cudf',
-  # TODO: 'dask-cudf',
+  'cuml',
+  'cudf',
+  'dask-cudf'
 ]
 
 packages = ["dask_cuml",
