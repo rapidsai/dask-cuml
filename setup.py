@@ -19,20 +19,20 @@ from setuptools.extension import Extension
 from Cython.Build import cythonize
 
 import versioneer
-from distutils.sysconfig import get_python_lib
 
 install_requires = [
   'numpy',
+  'dask',
   'cuml',
   'cudf',
-  'dask_cudf',
-  'dask'
+  'dask-cudf'
 ]
 
 packages = ["dask_cuml",
-            "dask_cuml.tests"]
+            "dask_cuml.tests",
+            "dask_cuml.neighbors"]
 
-  
+
 setup(name = "dask_cuml",
       description = "Distributed machine on GPUs using Dask",
       version = versioneer.get_version(),
@@ -41,7 +41,6 @@ setup(name = "dask_cuml",
         "Programming Landuage :: Python :: 3.5",
       ],
       author = "NVIDIA Corporation",
-      setup_requires=[],
       #url = "https://github.com/rapidsai/dask_cuml",
       install_requires = install_requires,
       license = "Apache Software License 2.0",
