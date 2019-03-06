@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (c) 2018, NVIDIA CORPORATION.
+# Copyright (c) 2019, NVIDIA CORPORATION.
 set -e
 
 # install libboost

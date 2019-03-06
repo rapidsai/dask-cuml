@@ -26,13 +26,13 @@ install_requires = [
   'cuml',
   'cudf',
   'dask_cuda',
-  'dask_cudf'
+  'dask_cudf',
+  'pytest'
 ]
 
 packages = ["dask_cuml",
             "dask_cuml.tests",
             "dask_cuml.neighbors"]
-
 
 setup(name = "dask_cuml",
       description = "Distributed machine on GPUs using Dask",
