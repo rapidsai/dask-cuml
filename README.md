@@ -2,7 +2,7 @@
 
 Dask cuML contains parallel machine learning algorithms that can make use of multiple GPUs on a single host. It is able to play nicely with other projects in the Dask ecosystem, as well as other RAPIDS projects, such as Dask cuDF.
 
-As an example, the following Python snippet loads input from a csv file into a Dask cuDF Dataframe and Performs a NearestNeighbors query:
+As an example, the following Python snippet loads input from a csv file into a [Dask cuDF](https://github.com/rapidsai/dask-cudf) Dataframe and Performs a NearestNeighbors query:
 
 ```python
 import dask_cudf
@@ -15,7 +15,24 @@ nn.fit(df)
 nn.kneighbors(df)
 ```
 
-### Supported Algorithms
+## Use
+
+In order to guarantee that multiple GPUs are used in computations, Dask cuML requires that each worker has been started with their own unique `CUDA_VISIBLE_DEVICES` setting. 
+
+For example, a user with a workstation containing 2 devices, would want their workers to be started with the following `CUDA_VISIBLE_DEVICES` settings (one per worker):
+
+```
+CUDA_VISIBLE_DEVICES=0,1 dask-worker --nprocs 1 --nthreads 1 scheduler_host:8786
+```
+```
+CUDA_VISIBLE_DEVICES=1,0 dask-worker --nprocs 1 --nthreads 1 scheduler_host:8786
+```
+
+This enables each worker to map the device memory of their local cuDFs to separate devices. For a CUDA variant of the `LocalCluster` that works with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
+
+Note: Workers must be started with `--nprocs 1` but can utilize any number of threads.
+
+## Supported Algorithms
 
 - Nearest Neighbors
 - Truncated Singular Value Decomposition
@@ -46,11 +63,17 @@ pip install dask-cuml
 Dask cuML depends on:
 - dask
 - dask_cudf
+- dask_cuda
 - cuml
 
 Dask cuML can be installed with the following command at the root of the repository:
 ```bash
 python setup.py install
+```
+
+Tests can be verified using Pytest:
+```bash
+py.test dask_cuml/test
 ```
 
 ## Contact
