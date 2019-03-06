@@ -23,15 +23,17 @@ import versioneer
 install_requires = [
   'numpy',
   'dask',
-  # TODO: 'cuml',
-  # TODO: 'cudf',
-  # TODO: 'dask-cudf',
+  'cuml',
+  'cudf',
+  'dask_cuda',
+  'dask_cudf',
+  'pytest'
 ]
 
 packages = ["dask_cuml",
-            "dask_cuml.tests"]
+            "dask_cuml.tests",
+            "dask_cuml.neighbors"]
 
-  
 setup(name = "dask_cuml",
       description = "Distributed machine on GPUs using Dask",
       version = versioneer.get_version(),
@@ -40,7 +42,7 @@ setup(name = "dask_cuml",
         "Programming Landuage :: Python :: 3.5",
       ],
       author = "NVIDIA Corporation",
-      #url = "https://github.com/rapidsai/dask_cuml",
+      url = "https://github.com/rapidsai/dask_cuml",
       install_requires = install_requires,
       license = "Apache Software License 2.0",
       cmdclass = versioneer.get_cmdclass(),

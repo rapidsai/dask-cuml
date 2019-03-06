@@ -29,7 +29,6 @@ def get_keywords():
     keywords = {"refnames": git_refnames, "full": git_full, "date": git_date}
     return keywords
 
-
 class VersioneerConfig:
     """Container for Versioneer configuration parameters."""
 
