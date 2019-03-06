@@ -25,7 +25,8 @@ install_requires = [
   'dask',
   'cuml',
   'cudf',
-  'dask-cudf'
+  'dask_cuda',
+  'dask_cudf'
 ]
 
 packages = ["dask_cuml",
@@ -41,7 +42,7 @@ setup(name = "dask_cuml",
         "Programming Landuage :: Python :: 3.5",
       ],
       author = "NVIDIA Corporation",
-      #url = "https://github.com/rapidsai/dask_cuml",
+      url = "https://github.com/rapidsai/dask_cuml",
       install_requires = install_requires,
       license = "Apache Software License 2.0",
       cmdclass = versioneer.get_cmdclass(),
