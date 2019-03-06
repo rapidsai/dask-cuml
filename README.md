@@ -2,20 +2,27 @@
 
 Dask cuML contains parallel machine learning algorithms that can make use of multiple GPUs on a single host. It is able to play nicely with other projects in the Dask ecosystem, as well as other RAPIDS projects, such as Dask cuDF.
 
-As an example, the following Python snippet loads input from a csv file into a [Dask cuDF](https://github.com/rapidsai/dask-cudf) Dataframe and Performs a NearestNeighbors query:
+## Use
+
+As an example, the following Python snippet loads input from a csv file into a [Dask cuDF](https://github.com/rapidsai/dask-cudf) Dataframe and Performs a NearestNeighbors query in parallel, on multiple GPUs:
 
 ```python
-import dask_cudf
-from dask_cuml.neighbors import NearestNeighbors
+# Create a Dask CUDA cluster w/ one worker per device
+from dask_cuda import LocalCUDACluster
+cluster = LocalCUDACluster()
 
+# Read CSV file in parallel across workers
+import dask_cudf
 df = dask_cudf.read_csv("/path/to/csv")
 
+# Fit a NearestNeighbors model and query it
+from dask_cuml.neighbors import NearestNeighbors
 nn = NearestNeighbors(n_neighbors = 10)
 nn.fit(df)
 nn.kneighbors(df)
 ```
 
-## Use
+## Dask CUDA Clusters
 
 In order to guarantee that multiple GPUs are used in computations, Dask cuML requires that each worker has been started with their own unique `CUDA_VISIBLE_DEVICES` setting. 
 
@@ -30,7 +37,7 @@ CUDA_VISIBLE_DEVICES=1,0 dask-worker --nprocs 1 --nthreads 1 scheduler_host:8786
 
 This enables each worker to map the device memory of their local cuDFs to separate devices. For a CUDA variant of the `LocalCluster` that works with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
 
-Note: Workers must be started with `--nprocs 1` but can utilize any number of threads.
+Note: If starting Dask workers using `dask-worker`,  `--nprocs 1` must be used. 
 
 ## Supported Algorithms
 
