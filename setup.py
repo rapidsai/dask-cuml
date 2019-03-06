@@ -19,14 +19,13 @@ from setuptools.extension import Extension
 from Cython.Build import cythonize
 
 import versioneer
-from distutils.sysconfig import get_python_lib
 
 install_requires = [
   'numpy',
-  'cuml',
-  'cudf',
-  'dask_cudf',
-  'dask'
+  'dask',
+  # TODO: 'cuml',
+  # TODO: 'cudf',
+  # TODO: 'dask-cudf',
 ]
 
 packages = ["dask_cuml",
@@ -41,7 +40,6 @@ setup(name = "dask_cuml",
         "Programming Landuage :: Python :: 3.5",
       ],
       author = "NVIDIA Corporation",
-      setup_requires=[],
       #url = "https://github.com/rapidsai/dask_cuml",
       install_requires = install_requires,
       license = "Apache Software License 2.0",
