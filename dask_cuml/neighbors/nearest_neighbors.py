@@ -346,10 +346,11 @@ class NearestNeighbors(object):
     one for each chunk of the Dask input, across the devices on that host. Results will reflect the global order,
     extracted from the Dask cuDF used for training.
     """
-    def __init__(self, should_downcast = False):
+    def __init__(self, n_neighbors = 5, should_downcast = False):
         self.model = None
         self.master_host = None
         self.should_downcast = should_downcast
+        self.n_neighbors = n_neighbors
 
     def fit(self, ddf):
         """
@@ -397,7 +398,7 @@ class NearestNeighbors(object):
         self.model = f
 
     @gen.coroutine
-    def _kneighbors(self, X, k):
+    def _kneighbors(self, X):
         """
         Internal function to query the kNN model.
         :param X:
@@ -405,6 +406,7 @@ class NearestNeighbors(object):
         :return:
         """
         client = default_client()
+        k = self.n_neighbors
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X.to_delayed()
