@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, NVIDIA CORPORATION.
+# Copyright (c) 2019, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,9 +15,6 @@
 #
 
 from setuptools import setup
-from setuptools.extension import Extension
-from Cython.Build import cythonize
-
 import versioneer
 
 install_requires = [
@@ -34,18 +31,20 @@ packages = ["dask_cuml",
             "dask_cuml.tests",
             "dask_cuml.neighbors"]
 
-setup(name = "dask_cuml",
-      description = "Distributed machine on GPUs using Dask",
-      version = versioneer.get_version(),
-      classifiers = [
+setup(name="dask_cuml",
+      description="Distributed ML algorithms on GPUs using Dask",
+      version=versioneer.get_version(),
+      classifiers=[
         "Intended Audience :: Developers",
-        "Programming Landuage :: Python :: 3.5",
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7"
       ],
-      author = "NVIDIA Corporation",
-      url = "https://github.com/rapidsai/dask_cuml",
-      install_requires = install_requires,
-      license = "Apache Software License 2.0",
-      cmdclass = versioneer.get_cmdclass(),
-      packages = packages,
-      zip_safe = False
-)
+      author="NVIDIA Corporation",
+      url="https://github.com/rapidsai/dask_cuml",
+      install_requires=install_requires,
+      license="Apache Software License 2.0",
+      cmdclass=versioneer.get_cmdclass(),
+      packages=packages,
+      zip_safe=False
+      )
