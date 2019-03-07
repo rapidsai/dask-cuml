@@ -398,7 +398,7 @@ class NearestNeighbors(object):
         self.model = f
 
     @gen.coroutine
-    def _kneighbors(self, X):
+    def _kneighbors(self, X, k = None):
         """
         Internal function to query the kNN model.
         :param X:
@@ -406,7 +406,8 @@ class NearestNeighbors(object):
         :return:
         """
         client = default_client()
-        k = self.n_neighbors
+        if k is None:
+            k = self.n_neighbors
 
         # Break apart Dask.array/dataframe into chunks/parts
         data_parts = X.to_delayed()
