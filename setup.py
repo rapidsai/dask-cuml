@@ -18,13 +18,7 @@ from setuptools import setup
 import versioneer
 
 install_requires = [
-  'numpy',
-  'dask',
-  'cuml',
-  'cudf',
-  'dask_cuda',
-  'dask_cudf',
-  'pytest'
+  'numpy'
 ]
 
 packages = ["dask_cuml",
