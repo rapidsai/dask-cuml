@@ -86,8 +86,6 @@ class LinearRegression(object):
 
         client = default_client()
 
-        print(client.who_has())
-
         # Finding location of parts of y_df to distribute columns of X_df
         loc_dict = {}
         yield wait(y_df)
@@ -95,7 +93,7 @@ class LinearRegression(object):
         location = tuple(tt.values())
         for i in range(X_df.npartitions):
             part_number = eval(list(tt.keys())[i])[1]
-            loc_dict[part_number] = location[i]
+            loc_dict[part_number] = parse_host_port(str(location[i])[:-3])
 
         # Lets divide the columns evenly, matching the order of the labels
         part_size = ceil(X_df.shape[1] / X_df.npartitions)
@@ -110,14 +108,12 @@ class LinearRegression(object):
             yield wait(loc_cudf)
             scattered.append(client.submit(preprocess_on_worker,
                                            loc_cudf,
-                                           workers=[parse_host_port(
-                                                    str(loc_dict[i])[:-3])]))
+                                           workers=[loc_dict[i]]))
             yield wait(scattered)
             coefs.append(client.submit(dev_array_on_worker,
                                        up_limit - i*part_size,
                                        1,
-                                       workers=[parse_host_port(
-                                                str(loc_dict[i])[:-3])]))
+                                       workers=[loc_dict[i]]))
             yield wait(coefs)
             del(loc_cudf)
 
@@ -219,7 +215,6 @@ class LinearRegression(object):
 
         # We scatter delayed operations to gather columns on the workers
         scattered = []
-        predictions = []
         for i in range(X_df.npartitions):
             up_limit = min((i+1)*part_size, X_df.shape[1])
             cols = X_df.columns.values[i*part_size:up_limit]
@@ -227,25 +222,18 @@ class LinearRegression(object):
             yield wait(loc_cudf)
             scattered.append(client.submit(preprocess_predict,
                                            loc_cudf,
-                                           workers=[parse_host_port(
-                                                    str(loc_dict[i])[:-3])]))
+                                           workers=[loc_dict[i]]))
             yield wait(scattered)
-            predictions.append(client.submit(pred_array_on_worker,
-                                             up_limit - i*part_size,
-                                             1,
-                                             workers=[parse_host_port(
-                                                      str(loc_dict[i])[:-3])]))
-            yield wait(predictions)
             del(loc_cudf)
 
         # Break apart Dask.array/dataframe into chunks/parts
         # data_parts = map(delayed, scattered)
         data_parts = scattered
-        pred_parts = predictions
+        # pred_parts = predictions
         coef_parts = coefs
 
         # Arrange parts into pairs.  This enforces co-locality
-        parts = list(map(delayed, zip(data_parts, coef_parts, pred_parts)))
+        parts = list(map(delayed, zip(data_parts, coef_parts)))
         parts = client.compute(parts)  # Start computation in the background
         yield wait(parts)
 
@@ -271,7 +259,9 @@ class LinearRegression(object):
 
         # Format of input_devarrays = ([(X, y)..], dev)
         input_devarrays = [(worker, client.submit(predict_to_device_arrays,
-                                                  part, workers=[worker]))
+                                                  part, worker, loc_dict,
+                                                  X_df.npartitions,
+                                                  workers=[worker]))
                            for worker, part in worker_parts.items()]
 
         yield wait(input_devarrays)
@@ -281,7 +271,6 @@ class LinearRegression(object):
         containing data.
         """
         exec_node = input_devarrays[0][0]
-        print("exec_node", exec_node)
 
         # Need to fetch parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
@@ -302,7 +291,10 @@ class LinearRegression(object):
 
         yield wait(ret)
 
-        return gen.Return(pred_parts)
+        dfs = [client.submit(series_on_worker, f, workers=[worker])
+               for worker, f in input_devarrays]
+
+        return dfs
 
     def _build_host_dict(self, gpu_futures, client):
 
@@ -329,8 +321,6 @@ def _fit_on_worker(data, params):
     # TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
     for p, dev in ipc_dev_list:
-        print("BEFORE IPC THREADS")
-        print(p, dev)
         for x, y, coef in p:
             ipct = new_ipc_thread([x, y, coef], dev)
             open_ipcs.append(ipct)
@@ -342,6 +332,9 @@ def _fit_on_worker(data, params):
                build_alloc_info(coef)[0]) for X, y, coef in p]
              for p, dev in devarrs_dev_list])))
 
+    print("ALLOC INFO FIT")
+    print(alloc_info)
+
     try:
         ols = cuOLS()
 
@@ -349,8 +342,6 @@ def _fit_on_worker(data, params):
 
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
-
-    intercept = 10.0
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
@@ -374,6 +365,9 @@ def _predict_on_worker(data, intercept, params=None):
             [[(build_alloc_info(X)[0], build_alloc_info(coef)[0],
                build_alloc_info(pred)[0]) for X, coef, pred in p]
              for p, dev in devarrs_dev_list])))
+
+    print("ALLOC INFO PREDICT")
+    print(alloc_info)
 
     try:
         ols = cuOLS()
@@ -400,12 +394,9 @@ def build_alloc_info(p): return [p.__cuda_array_interface__]
 def get_input_ipc_handles(arr):
 
     arrs, dev = arr
-    print("BEFORE IPC HANDLES: ", arrs)
     ret = [(X.get_ipc_handle(),
             y.get_ipc_handle(),
             coef.get_ipc_handle()) for X, y, coef in arrs]
-
-    print("GOT IPC HANDLES: ", ret, dev)
 
     return ret, dev
 
@@ -445,16 +436,22 @@ def fit_to_device_arrays(arr):
     return mats, dev
 
 
-def predict_to_device_arrays(arr):
+def predict_to_device_arrays(arr, worker, loc_dict, nparts):
     """
     :param arr:
         A tuple in the form of (X, y, coef)
     :return:
     """
+    part_number = list(loc_dict.keys())[list(loc_dict.values()).index(worker)]
 
-    mats = [(X.compute(order='F').as_gpu_matrix(),
-             coef,
-             pred) for X, coef, pred in arr]
+    mats = []
+    for X, coef in arr:
+        nrows = len(X)
+        part_size = ceil(nrows / nparts)
+        up_limit = min((part_number+1)*part_size, nrows)
+        mat = X.compute(order='F').as_gpu_matrix()
+        pred = cuda.to_device(np.zeros(up_limit-(part_number*part_size)))
+        mats.append([mat, coef, pred])
 
     dev = device_of_devicendarray(mats[0][0])
 
@@ -485,8 +482,8 @@ def preprocess_predict(arr):
     return arr
 
 
-def series_on_worker(ary, f, m):
-    ret = cudf.Series(ary, index=cudf.dataframe.RangeIndex(f*m, f*m+m, 1))
+def series_on_worker(ary):
+    ret = cudf.Series(ary[0][0][2])
     return ret
 
 
