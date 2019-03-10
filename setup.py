@@ -30,7 +30,7 @@ install_requires = [
 packages = ["dask_cuml",
             "dask_cuml.tests",
             "dask_cuml.neighbors",
-            "dask_cuml.linear_regression"]
+            "dask_cuml.linear_model"]
 
 setup(name="dask_cuml",
       description="Distributed ML algorithms on GPUs using Dask",
