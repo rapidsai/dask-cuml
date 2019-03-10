@@ -86,6 +86,8 @@ class LinearRegression(object):
 
         client = default_client()
 
+        print(client.who_has())
+
         # Finding location of parts of y_df to distribute columns of X_df
         loc_dict = {}
         yield wait(y_df)
@@ -223,12 +225,12 @@ class LinearRegression(object):
             cols = X_df.columns.values[i*part_size:up_limit]
             loc_cudf = X_df[cols]
             yield wait(loc_cudf)
-            scattered.append(client.submit(preprocess_on_worker,
+            scattered.append(client.submit(preprocess_predict,
                                            loc_cudf,
                                            workers=[parse_host_port(
                                                     str(loc_dict[i])[:-3])]))
             yield wait(scattered)
-            predictions.append(client.submit(dev_array_on_worker,
+            predictions.append(client.submit(pred_array_on_worker,
                                              up_limit - i*part_size,
                                              1,
                                              workers=[parse_host_port(
@@ -279,6 +281,7 @@ class LinearRegression(object):
         containing data.
         """
         exec_node = input_devarrays[0][0]
+        print("exec_node", exec_node)
 
         # Need to fetch parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
@@ -298,6 +301,7 @@ class LinearRegression(object):
                             self._build_params_map(), workers=[exec_node])
 
         yield wait(ret)
+
         return gen.Return(pred_parts)
 
     def _build_host_dict(self, gpu_futures, client):
@@ -325,6 +329,8 @@ def _fit_on_worker(data, params):
     # TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
     for p, dev in ipc_dev_list:
+        print("BEFORE IPC THREADS")
+        print(p, dev)
         for x, y, coef in p:
             ipct = new_ipc_thread([x, y, coef], dev)
             open_ipcs.append(ipct)
@@ -336,8 +342,6 @@ def _fit_on_worker(data, params):
                build_alloc_info(coef)[0]) for X, y, coef in p]
              for p, dev in devarrs_dev_list])))
 
-    # Call _fit() w/ all the cudfs on this worker and our coefficient pointers
-
     try:
         ols = cuOLS()
 
@@ -346,13 +350,15 @@ def _fit_on_worker(data, params):
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
 
+    intercept = 10.0
+
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
 
     return intercept
 
 
-def _predict_on_worker(data, intercept, params):
+def _predict_on_worker(data, intercept, params=None):
     ipc_dev_list, devarrs_dev_list = data
 
     # TODO: One ipc thread per device instead of per x,y,coef tuple
@@ -381,7 +387,6 @@ def _predict_on_worker(data, intercept, params):
     [t.join() for t in open_ipcs]
 
 
-
 def group(lst, n):
     for i in range(0, len(lst), n):
         val = lst[i:i+n]
@@ -395,9 +400,12 @@ def build_alloc_info(p): return [p.__cuda_array_interface__]
 def get_input_ipc_handles(arr):
 
     arrs, dev = arr
+    print("BEFORE IPC HANDLES: ", arrs)
     ret = [(X.get_ipc_handle(),
             y.get_ipc_handle(),
             coef.get_ipc_handle()) for X, y, coef in arrs]
+
+    print("GOT IPC HANDLES: ", ret, dev)
 
     return ret, dev
 
@@ -444,16 +452,9 @@ def predict_to_device_arrays(arr):
     :return:
     """
 
-    # BUG: need to create copy of coefs to avoid IPC
-    # ERROR:Error opening ipc_handle on device 1: [208]
-    # Call to call_cuIpcOpenMemHandle results in CUDA_ERROR_ALREADY_MAPPED
-    mats = []
-    for X, coef, pred in arr:
-        coef_c = cuda.device_array_like(coef)
-        coef_c.copy_to_device(coef)
-        mats.append((X.compute(order='F').as_gpu_matrix(),
-                     coef_c,
-                     pred))
+    mats = [(X.compute(order='F').as_gpu_matrix(),
+             coef,
+             pred) for X, coef, pred in arr]
 
     dev = device_of_devicendarray(mats[0][0])
 
@@ -471,6 +472,17 @@ def preprocess_on_worker(arr):
 
 def dev_array_on_worker(rows, cols):
     return cuda.to_device(np.zeros((rows, cols)))
+
+
+# Need to have different named function for predict to avoid
+# dask key colision in case of same rows and columns between
+# different arrays
+def pred_array_on_worker(rows, cols):
+    return cuda.to_device(np.zeros((rows, cols)))
+
+
+def preprocess_predict(arr):
+    return arr
 
 
 def series_on_worker(ary, f, m):
