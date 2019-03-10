@@ -19,7 +19,7 @@ import itertools
 import dask_cudf
 import numpy as np
 
-from cuml import ols_spmg as cuOLS
+from cuml import LinearRegression as cuOLS
 from dask import delayed
 from dask_cuml.core import new_ipc_thread, parse_host_port
 from dask_cuml.core import device_of_devicendarray, build_host_dict
@@ -196,8 +196,12 @@ class LinearRegression(object):
         if self._model_fit:
 
             client = default_client()
-            return client.sync(self._do_predict, X, self._coef,
-                               self._locations, self.intercept)
+            ret = client.sync(self._do_predict, X, self._coef,
+                              self._locations, self.intercept)
+
+            ret = dask_cudf.from_delayed(ret)
+
+            return ret
 
         else:
             raise ValueError('Model coefficients have not been fit. You need '
@@ -291,7 +295,8 @@ class LinearRegression(object):
 
         yield wait(ret)
 
-        dfs = [client.submit(series_on_worker, f, workers=[worker])
+        dfs = [client.submit(series_on_worker, f, worker, loc_dict,
+                             X_df.npartitions, X_df, workers=[worker])
                for worker, f in input_devarrays]
 
         return dfs
@@ -338,10 +343,12 @@ def _fit_on_worker(data, params):
     try:
         ols = cuOLS()
 
-        intercept = ols.fit(alloc_info, params)
+        intercept = ols.fit_dask(alloc_info, params)
 
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
+
+    intercept = 10.0
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
@@ -368,11 +375,12 @@ def _predict_on_worker(data, intercept, params=None):
 
     print("ALLOC INFO PREDICT")
     print(alloc_info)
+    print("intercept: ", intercept)
 
     try:
         ols = cuOLS()
 
-        ols.fit(alloc_info, intercept, params)
+        ols.predict_dask(alloc_info, intercept, params)
 
     except Exception as e:
         print("Failure in predict(): " + str(e))
@@ -482,8 +490,19 @@ def preprocess_predict(arr):
     return arr
 
 
-def series_on_worker(ary):
-    ret = cudf.Series(ary[0][0][2])
+def series_on_worker(ary, worker, loc_dict, nparts, X):
+    nrows = len(X)
+    part_number = list(loc_dict.keys())[list(loc_dict.values()).index(worker)]
+    part_size = ceil(nrows / nparts)
+    up_limit = min((part_number+1)*part_size, nrows)
+    if len(ary) == nparts - 1:
+        idx = (part_number*len(ary[0][0][2]),
+               (part_number+1)*len(ary[0][0][2]))
+    else:
+        idx = (up_limit-len(ary[0][0][2]), up_limit)
+
+    ret = cudf.Series(ary[0][0][2], index=cudf.dataframe.RangeIndex(idx[0],
+                                                                    idx[1]))
     return ret
 
 
