@@ -37,23 +37,12 @@ conda list
 # BUILD - Build libcuml and cuML from source
 ################################################################################
 
-logger "Build libcuml..."
-mkdir -p $WORKSPACE/cuML/build
-cd $WORKSPACE/cuML/build
-logger "Run cmake libcuml..."
-cmake -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX -DCMAKE_CXX11_ABI=ON ..
+logger "Install cuml"
 
-logger "Clean up make..."
-make clean
-
-logger "Make libcuml..."
-make -j${PARALLEL_LEVEL}
-
-logger "Install libcuml..."
-make -j${PARALLEL_LEVEL} install
+conda install -c rapidsai -c rapidsai-nightly -c conda-forge -c numba -c rapidsai/label/cuda${CUDA_REL} -c nvidia/label/cuda${CUDA_REL} -c pytorch -c defaults cuml dask distributed cudf dask_cudf
 
 logger "Build Dask cuML..."
-cd $WORKSPACE
+cd $WORKSPACE/
 python setup.py build_ext --inplace
 
 ################################################################################
