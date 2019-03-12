@@ -20,7 +20,7 @@ import versioneer
 install_requires = [
   'numpy',
   'dask',
-  'cuml',
+  'dask-cuml',
   'cudf',
   'dask_cuda',
   'dask_cudf',

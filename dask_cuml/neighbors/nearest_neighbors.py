@@ -369,7 +369,7 @@ class NearestNeighbors(object):
             raise Exception("Dask cluster appears to span hosts. Current "
                             "multi-GPU implementation is limited to a single host")
 
-        # Choose a random worker on each unique host to run cuml's kNN.fit() function
+        # Choose a random worker on each unique host to run dask-cuml's kNN.fit() function
         # on all the cuDFs living on that host.
         self.master_host = [(host, random.sample(ports, 1)[0])
                             for host, ports in host_dict][0]
