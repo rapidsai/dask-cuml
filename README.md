@@ -26,9 +26,9 @@ nn.kneighbors(df)
 
 ### Using the LocalCUDACluster()
 
-Clusters of Dask workers can be started in several different ways. One of the simplest methods is to use the `LocalCluster`. For a CUDA variant of the `LocalCluster` that works well with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
+Clusters of Dask workers can be started in several different ways. One of the simplest methods used in non-CUDA Dask clusters is to use `LocalCluster`. For a CUDA variant of the `LocalCluster` that works well with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
 
-Note: It's important to make sure the `LocalCUDACluster` is instantiated in your code before any CUDA contexts are created. Otherwise, it's possible that your workers will all be mapped to the device. 
+Note: It's important to make sure the `LocalCUDACluster` is instantiated in your code before any CUDA contexts are created (eg. before importing Numba or cudf). Otherwise, it's possible that your workers will all be mapped to the same device. 
 
 ### Using the dask-worker command
 
