@@ -38,7 +38,7 @@ conda list
 ################################################################################
 
 logger "Install dask-cuml dependencies"
-conda install -c rapidsai -c rapidsai-nightly cuml dask distributed cudf dask_cudf
+conda install -c nvidia -c rapidsai -c conda-forge -c defaults -c rapidsai -c rapidsai-nightly cuml dask distributed cudf dask_cudf
 
 logger "Build Dask cuML..."
 cd $WORKSPACE/
