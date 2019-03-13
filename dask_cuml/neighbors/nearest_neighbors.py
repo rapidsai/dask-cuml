@@ -369,7 +369,7 @@ class NearestNeighbors(object):
             raise Exception("Dask cluster appears to span hosts. Current "
                             "multi-GPU implementation is limited to a single host")
 
-        # Choose a random worker on each unique host to run cuml's kNN.fit() function
+        # Choose a random worker on each unique host to run dask-cuml's kNN.fit() function
         # on all the cuDFs living on that host.
         self.master_host = [(host, random.sample(ports, 1)[0])
                             for host, ports in host_dict][0]
@@ -398,7 +398,7 @@ class NearestNeighbors(object):
         self.model = f
 
     @gen.coroutine
-    def _kneighbors(self, X, k = None):
+    def _kneighbors(self, X, k):
         """
         Internal function to query the kNN model.
         :param X:
@@ -466,7 +466,7 @@ class NearestNeighbors(object):
 
         return gen.Return(dfs)
 
-    def kneighbors(self, X, k):
+    def kneighbors(self, X, k = None):
 
         """
         Queries the multi-gpu knn model given a dask-cudf as the query
@@ -481,6 +481,9 @@ class NearestNeighbors(object):
         :return:
             dists and indices of the k-nearest neighbors to the input vectors
         """
+
+        if k is None:
+            k = self.n_neighbors
 
         client = default_client()
         dfs = client.sync(self._kneighbors, X, k).value
