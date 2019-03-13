@@ -34,12 +34,11 @@ $CXX --version
 conda list
 
 ################################################################################
-# BUILD - Build libcuml and cuML from source
+# BUILD - Build dask-cuml from source
 ################################################################################
 
-logger "Install cuml"
-
-conda install -c rapidsai -c rapidsai-nightly -c conda-forge -c numba -c rapidsai/label/cuda${CUDA_REL} -c nvidia/label/cuda${CUDA_REL} -c pytorch -c defaults cuml dask distributed cudf dask_cudf
+logger "Install dask-cuml dependencies"
+conda install -c rapidsai -c rapidsai-nightly cuml dask distributed cudf dask_cudf
 
 logger "Build Dask cuML..."
 cd $WORKSPACE/
@@ -48,9 +47,6 @@ python setup.py build_ext --inplace
 ################################################################################
 # TEST - Run GoogleTest and py.tests for libcuml and cuML
 ################################################################################
-
-logger "Check GPU usage..."
-nvidia-smi
 
 logger "Python py.test for Dask cuML..."
 cd $WORKSPACE

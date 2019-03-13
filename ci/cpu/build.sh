@@ -1,8 +1,8 @@
 #!/bin/bash
-# Copyright (c) 2018, NVIDIA CORPORATION.
-######################################
-# cuML CPU conda build script for CI #
-######################################
+# Copyright (c) 2019, NVIDIA CORPORATION.
+###########################################
+# Dask cuML CPU conda build script for CI #
+###########################################
 set -ex
 
 # Logger function for build status output
@@ -63,14 +63,11 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 ################################################################################
 
 logger "Build conda pkg for dask-cuml..."
-source ci/cpu/cuml/build_dask_cuml.sh
+source ci/cpu/dask-cuml/build_dask_cuml.sh
 
 ################################################################################
 # UPLOAD - Conda packages
 ################################################################################
 
-logger "Upload conda pkgs for libcuml..."
-source ci/cpu/libcuml/upload-anaconda.sh
-
-logger "Upload conda pkg for dask-cuml..."
-source ci/cpu/cuml/upload-anaconda.sh
+logger "Upload conda pkgs for dask-cuml..."
+source ci/cpu/dask-cuml/upload-anaconda.sh
