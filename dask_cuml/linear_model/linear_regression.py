@@ -83,9 +83,6 @@ class LinearRegression(object):
     @gen.coroutine
     def _do_fit(self, X_df, y_df, dtype):
 
-        print("Fitting " + str(X_df.shape[1]) + " columns on " +
-              str(X_df.npartitions) + " partitions.")
-
         client = default_client()
 
         # Finding location of parts of y_df to distribute columns of X_df
@@ -165,8 +162,6 @@ class LinearRegression(object):
         # Last worker is the only one that can have less items.
         exec_node = loc_dict[X_df.npartitions-1]
 
-        # CHECK WHO IS THE LAST WORKER with last of loc_dct
-
         # Need to fetch parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
         not_on_worker = list(filter(lambda x: x[0] != exec_node,
@@ -224,8 +219,6 @@ class LinearRegression(object):
     @gen.coroutine
     def _do_predict(self, X_df, coefs, loc_dict, intercept, dtype):
 
-        print("Predicting " + str(X_df.shape[1]) + " columns on " +
-              str(X_df.npartitions) + " partitions.")
 
         client = default_client()
 
@@ -375,7 +368,6 @@ def _fit_on_worker(data, params):
             locals.append(build_alloc_info(coef)[0])
             locals.append(build_alloc_info(pred)[0])
         alloc_info.append(locals)
-
 
     try:
         from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
