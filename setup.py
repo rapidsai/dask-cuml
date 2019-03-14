@@ -18,18 +18,13 @@ from setuptools import setup
 import versioneer
 
 install_requires = [
-  'numpy',
-  'dask',
-  'distributed',
-  'cudf',
-  'dask_cuda',
-  'dask_cudf',
-  'pytest'
+  'numpy'
 ]
 
 packages = ["dask_cuml",
             "dask_cuml.tests",
-            "dask_cuml.neighbors"]
+            "dask_cuml.neighbors",
+            "dask_cuml.linear_model"]
 
 setup(name="dask_cuml",
       description="Distributed ML algorithms on GPUs using Dask",

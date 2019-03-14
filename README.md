@@ -24,7 +24,15 @@ nn.kneighbors(df)
 
 ## Dask CUDA Clusters
 
-In order to guarantee that multiple GPUs are used in computations, Dask cuML requires that each worker has been started with their own unique `CUDA_VISIBLE_DEVICES` setting. 
+### Using the LocalCUDACluster()
+
+Clusters of Dask workers can be started in several different ways. One of the simplest methods used in non-CUDA Dask clusters is to use `LocalCluster`. For a CUDA variant of the `LocalCluster` that works well with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
+
+Note: It's important to make sure the `LocalCUDACluster` is instantiated in your code before any CUDA contexts are created (eg. before importing Numba or cudf). Otherwise, it's possible that your workers will all be mapped to the same device. 
+
+### Using the dask-worker command
+
+If you will be starting your workers using the `dask-worker` command, Dask cuML requires that each worker has been started with their own unique `CUDA_VISIBLE_DEVICES` setting. 
 
 For example, a user with a workstation containing 2 devices, would want their workers to be started with the following `CUDA_VISIBLE_DEVICES` settings (one per worker):
 
@@ -35,7 +43,7 @@ CUDA_VISIBLE_DEVICES=0,1 dask-worker --nprocs 1 --nthreads 1 scheduler_host:8786
 CUDA_VISIBLE_DEVICES=1,0 dask-worker --nprocs 1 --nthreads 1 scheduler_host:8786
 ```
 
-This enables each worker to map the device memory of their local cuDFs to separate devices. For a CUDA variant of the `LocalCluster` that works with Dask cuML, check out the `LocalCUDACluster` from the [dask-cuda](https://github.com/rapidsai/dask-cuda) project.
+This enables each worker to map the device memory of their local cuDFs to separate devices.
 
 Note: If starting Dask workers using `dask-worker`,  `--nprocs 1` must be used. 
 
