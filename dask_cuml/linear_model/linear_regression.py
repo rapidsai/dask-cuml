@@ -59,8 +59,8 @@ class LinearRegression(object):
 
     def fit(self, X, y):
         """
-        Fits a multi-gpu linear regression model such that each the resulting
-        coefficients are also distributed across the GPUs.
+        Fits a multi-gpu linear regression model such that each of the
+        resulting coefficients are also distributed across the GPUs.
         :param futures:
         :return:
         """
@@ -218,8 +218,6 @@ class LinearRegression(object):
 
     @gen.coroutine
     def _do_predict(self, X_df, coefs, loc_dict, intercept, dtype):
-
-
         client = default_client()
 
         part_size = ceil(X_df.shape[1] / X_df.npartitions)
@@ -238,9 +236,7 @@ class LinearRegression(object):
             del(loc_cudf)
 
         # Break apart Dask.array/dataframe into chunks/parts
-        # data_parts = map(delayed, scattered)
         data_parts = scattered
-        # pred_parts = predictions
         coef_parts = coefs.to_delayed()
 
         # Arrange parts into pairs.  This enforces co-locality
