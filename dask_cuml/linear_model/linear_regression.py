@@ -344,13 +344,6 @@ def _fit_on_worker(data, params):
         ipct = new_ipc_thread(arrs, dev)
         open_ipcs.append(ipct)
 
-    # alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
-    # alloc_info.extend(
-    #     list(itertools.chain(
-    #         [[(build_alloc_info(X)[0], build_alloc_info(y)[0],
-    #            build_alloc_info(coef)[0]) for X, y, coef in p]
-    #          for p, dev in devarrs_dev_list])))
-
     alloc_info = []
     for t in open_ipcs:
         outsiders = t.info()
