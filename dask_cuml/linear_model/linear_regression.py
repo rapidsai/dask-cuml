@@ -361,7 +361,7 @@ def _fit_on_worker(data, params):
     try:
         from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
         ols = cuOLS()
-        intercept = ols._fit_dask(alloc_info, params)
+        intercept = ols._fit_mg(alloc_info, params)
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
 
@@ -398,7 +398,7 @@ def _predict_on_worker(data, intercept, params):
         locals = []
         for X, y, coef in p:
             locals.append(
-                build_alloc_info(X,unique=np.random.randint(0, 1e6))[0])
+                build_alloc_info(X, unique=np.random.randint(0, 1e6))[0])
             locals.append(
                 build_alloc_info(y, unique=np.random.randint(0, 1e6))[0])
             locals.append(
@@ -408,7 +408,7 @@ def _predict_on_worker(data, intercept, params):
     try:
         from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
         ols = cuOLS()
-        ols._predict_dask(alloc_info, intercept, params)
+        ols._predict_mg(alloc_info, intercept, params)
 
     except Exception as e:
         print("Failure in predict(): " + str(e))
