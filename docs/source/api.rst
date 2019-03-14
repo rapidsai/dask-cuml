@@ -1,4 +1,4 @@
-cuML API Reference
+Dask cuML API Reference
 ====================
 
 Linear Regression

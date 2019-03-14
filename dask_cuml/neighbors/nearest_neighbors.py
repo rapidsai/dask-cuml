@@ -508,14 +508,6 @@ class NearestNeighbors(object):
         return D_ddf, I_ddf
 
 
-    def get(self, indices):
-        """
-        Returns the vectors from the knn index for a list of indices.
-        :param indices:
-        :return:
-        """
-        pass
-
     @staticmethod
     def _build_host_dict(gpu_futures, client):
         """
