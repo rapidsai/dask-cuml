@@ -1,4 +1,4 @@
-Welcome to cuML's documentation!
+Welcome to Dask cuML's documentation!
 =================================
 
 .. toctree::
