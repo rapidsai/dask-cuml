@@ -50,7 +50,6 @@ Note: If starting Dask workers using `dask-worker`,  `--nprocs 1` must be used.
 ## Supported Algorithms
 
 - Nearest Neighbors
-- Truncated Singular Value Decomposition
 - Linear Regression
 
 More ML algorithms are being worked on. 
