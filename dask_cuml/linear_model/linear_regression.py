@@ -15,11 +15,9 @@
 #
 
 import cudf
-import itertools
 import dask_cudf
 import numpy as np
 
-from cuml import LinearRegression as cuOLS
 from dask import delayed
 from dask_cuml.core import new_ipc_thread, parse_host_port
 from dask_cuml.core import device_of_devicendarray, build_host_dict
@@ -38,7 +36,7 @@ class LinearRegression(object):
     def __init__(self, fit_intercept=True, normalize=False):
 
         """
-        Initializes the liner regression class.
+        Initializes the linear regression class.
 
         Parameters
         ----------
@@ -53,13 +51,11 @@ class LinearRegression(object):
         self.fit_intercept = fit_intercept
         self.normalize = normalize
         self._model_fit = False
+        self._consec_call = 0
 
     def _build_params_map(self):
         return {"fit_intercept": self.fit_intercept,
                 "normalize": self.normalize}
-
-    def get_coef(self):
-        return False
 
     def fit(self, X, y):
         """
@@ -70,16 +66,22 @@ class LinearRegression(object):
         """
         client = default_client()
 
-        coef, intercept, locations = client.sync(self._do_fit, X, y)
+        self.dtype = X[X.columns[0]].compute().dtype
 
-        self._coef = coef
+        coef, intercept, locations = client.sync(self._do_fit, X, y,
+                                                 self.dtype)
+
         self.intercept = intercept
         self._locations = locations
 
         self._model_fit = True
 
+        self._ncols = X.shape[1]
+
+        self.coef_ = dask_cudf.from_delayed(coef)
+
     @gen.coroutine
-    def _do_fit(self, X_df, y_df):
+    def _do_fit(self, X_df, y_df, dtype):
 
         print("Fitting " + str(X_df.shape[1]) + " columns on " +
               str(X_df.npartitions) + " partitions.")
@@ -112,7 +114,7 @@ class LinearRegression(object):
             yield wait(scattered)
             coefs.append(client.submit(dev_array_on_worker,
                                        up_limit - i*part_size,
-                                       1,
+                                       dtype=dtype,
                                        workers=[loc_dict[i]]))
             yield wait(coefs)
             del(loc_cudf)
@@ -159,7 +161,11 @@ class LinearRegression(object):
         Gather IPC handles for each worker and call _fit() on each worker
         containing data.
         """
-        exec_node = input_devarrays[0][0]
+
+        # Last worker is the only one that can have less items.
+        exec_node = loc_dict[X_df.npartitions-1]
+
+        # CHECK WHO IS THE LAST WORKER with last of loc_dct
 
         # Need to fetch parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
@@ -181,7 +187,15 @@ class LinearRegression(object):
 
         yield wait(intercept)
 
-        raise gen.Return((coefs, intercept, loc_dict))
+        coef_series = [client.submit(coef_on_worker, coefs[i], i,
+                                     X_df.shape[1],
+                                     X_df.npartitions, loc_dict[i],
+                                     workers=[loc_dict[i]])
+                       for i in range(len(loc_dict))]
+
+        # coef_on_worker(self, coef, locations, ncols, nparts, worker):
+
+        raise gen.Return((coef_series, intercept, loc_dict))
 
     def predict(self, X):
         """
@@ -196,8 +210,8 @@ class LinearRegression(object):
         if self._model_fit:
 
             client = default_client()
-            ret = client.sync(self._do_predict, X, self._coef,
-                              self._locations, self.intercept)
+            ret = client.sync(self._do_predict, X, self.coef_,
+                              self._locations, self.intercept, self.dtype)
 
             ret = dask_cudf.from_delayed(ret)
 
@@ -208,7 +222,7 @@ class LinearRegression(object):
                              'to run the fit() method first. ')
 
     @gen.coroutine
-    def _do_predict(self, X_df, coefs, loc_dict, intercept):
+    def _do_predict(self, X_df, coefs, loc_dict, intercept, dtype):
 
         print("Predicting " + str(X_df.shape[1]) + " columns on " +
               str(X_df.npartitions) + " partitions.")
@@ -234,7 +248,7 @@ class LinearRegression(object):
         # data_parts = map(delayed, scattered)
         data_parts = scattered
         # pred_parts = predictions
-        coef_parts = coefs
+        coef_parts = coefs.to_delayed()
 
         # Arrange parts into pairs.  This enforces co-locality
         parts = list(map(delayed, zip(data_parts, coef_parts)))
@@ -265,6 +279,7 @@ class LinearRegression(object):
         input_devarrays = [(worker, client.submit(predict_to_device_arrays,
                                                   part, worker, loc_dict,
                                                   X_df.npartitions,
+                                                  dtype=dtype,
                                                   workers=[worker]))
                            for worker, part in worker_parts.items()]
 
@@ -274,7 +289,7 @@ class LinearRegression(object):
         Gather IPC handles for each worker and call _fit() on each worker
         containing data.
         """
-        exec_node = input_devarrays[0][0]
+        exec_node = loc_dict[X_df.npartitions-1]
 
         # Need to fetch parts on worker
         on_worker = list(filter(lambda x: x[0] == exec_node, input_devarrays))
@@ -282,6 +297,7 @@ class LinearRegression(object):
                                     input_devarrays))
 
         ipc_handles = [client.submit(get_input_ipc_handles, future,
+                                     unique=np.random.randint(0, 1e6),
                                      workers=[a_worker])
                        for a_worker, future in not_on_worker]
 
@@ -291,7 +307,8 @@ class LinearRegression(object):
         # used to make calls through cython
         # Calls _predict_on_worker defined in the bottom
         ret = client.submit(_predict_on_worker, (ipc_handles, raw_arrays),
-                            self._build_params_map(), workers=[exec_node])
+                            self.intercept, self._build_params_map(),
+                            workers=[exec_node])
 
         yield wait(ret)
 
@@ -323,32 +340,49 @@ class LinearRegression(object):
 def _fit_on_worker(data, params):
     ipc_dev_list, devarrs_dev_list = data
 
-    # TODO: One ipc thread per device instead of per x,y,coef tuple
+    # Open 1 ipc thread per device
     open_ipcs = []
     for p, dev in ipc_dev_list:
+        arrs = []
         for x, y, coef in p:
-            ipct = new_ipc_thread([x, y, coef], dev)
-            open_ipcs.append(ipct)
+            arrs.append(x)
+            arrs.append(y)
+            arrs.append(coef)
+        ipct = new_ipc_thread(arrs, dev)
+        open_ipcs.append(ipct)
 
-    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
-    alloc_info.extend(
-        list(itertools.chain(
-            [[(build_alloc_info(X)[0], build_alloc_info(y)[0],
-               build_alloc_info(coef)[0]) for X, y, coef in p]
-             for p, dev in devarrs_dev_list])))
+    # alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
+    # alloc_info.extend(
+    #     list(itertools.chain(
+    #         [[(build_alloc_info(X)[0], build_alloc_info(y)[0],
+    #            build_alloc_info(coef)[0]) for X, y, coef in p]
+    #          for p, dev in devarrs_dev_list])))
 
-    print("ALLOC INFO FIT")
-    print(alloc_info)
+    alloc_info = []
+    for t in open_ipcs:
+        outsiders = t.info()
+        triplet = []
+        for i in range(0, len(outsiders), 3):
+            triplet.append(outsiders[i])
+            triplet.append(outsiders[i+1])
+            triplet.append(outsiders[i+2])
+            alloc_info.append(triplet)
+
+    for p, dev in devarrs_dev_list:
+        locals = []
+        for X, coef, pred in p:
+            locals.append(build_alloc_info(X)[0])
+            locals.append(build_alloc_info(coef)[0])
+            locals.append(build_alloc_info(pred)[0])
+        alloc_info.append(locals)
+
 
     try:
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
         ols = cuOLS()
-
-        intercept = ols.fit_dask(alloc_info, params)
-
+        intercept = ols._fit_dask(alloc_info, params)
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
-
-    intercept = 10.0
 
     [t.close() for t in open_ipcs]
     [t.join() for t in open_ipcs]
@@ -356,31 +390,44 @@ def _fit_on_worker(data, params):
     return intercept
 
 
-def _predict_on_worker(data, intercept, params=None):
+def _predict_on_worker(data, intercept, params):
     ipc_dev_list, devarrs_dev_list = data
 
-    # TODO: One ipc thread per device instead of per x,y,coef tuple
     open_ipcs = []
     for p, dev in ipc_dev_list:
-        for x, coef, pred in p:
-            ipct = new_ipc_thread([x, coef, pred], dev)
-            open_ipcs.append(ipct)
+        arrs = []
+        for mat, coef, pred in p:
+            arrs.append(mat)
+            arrs.append(coef)
+            arrs.append(pred)
+        ipct = new_ipc_thread(arrs, dev)
+        open_ipcs.append(ipct)
 
-    alloc_info = list(itertools.chain([t.info() for t in open_ipcs]))
-    alloc_info.extend(
-        list(itertools.chain(
-            [[(build_alloc_info(X)[0], build_alloc_info(coef)[0],
-               build_alloc_info(pred)[0]) for X, coef, pred in p]
-             for p, dev in devarrs_dev_list])))
+    alloc_info = []
+    for t in open_ipcs:
+        outsiders = t.info()
+        triplet = []
+        for i in range(0, len(outsiders), 3):
+            triplet.append(outsiders[i])
+            triplet.append(outsiders[i+1])
+            triplet.append(outsiders[i+2])
+            alloc_info.append(triplet)
 
-    print("ALLOC INFO PREDICT")
-    print(alloc_info)
-    print("intercept: ", intercept)
+    for p, dev in devarrs_dev_list:
+        locals = []
+        for X, y, coef in p:
+            locals.append(
+                build_alloc_info(X,unique=np.random.randint(0, 1e6))[0])
+            locals.append(
+                build_alloc_info(y, unique=np.random.randint(0, 1e6))[0])
+            locals.append(
+                build_alloc_info(coef, unique=np.random.randint(0, 1e6))[0])
+        alloc_info.append(locals)
 
     try:
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
         ols = cuOLS()
-
-        ols.predict_dask(alloc_info, intercept, params)
+        ols._predict_dask(alloc_info, intercept, params)
 
     except Exception as e:
         print("Failure in predict(): " + str(e))
@@ -396,10 +443,10 @@ def group(lst, n):
             yield tuple(val)
 
 
-def build_alloc_info(p): return [p.__cuda_array_interface__]
+def build_alloc_info(p, unique=0): return [p.__cuda_array_interface__]
 
 
-def get_input_ipc_handles(arr):
+def get_input_ipc_handles(arr, unique=0):
 
     arrs, dev = arr
     ret = [(X.get_ipc_handle(),
@@ -434,7 +481,7 @@ def fit_to_device_arrays(arr):
     :return:
     """
 
-    mats = [(X.compute(order='F').as_gpu_matrix(),
+    mats = [(X.compute().as_gpu_matrix(order='F'),
              y.to_gpu_array(),
              coef) for X, y, coef in arr]
 
@@ -444,7 +491,7 @@ def fit_to_device_arrays(arr):
     return mats, dev
 
 
-def predict_to_device_arrays(arr, worker, loc_dict, nparts):
+def predict_to_device_arrays(arr, worker, loc_dict, nparts, dtype):
     """
     :param arr:
         A tuple in the form of (X, y, coef)
@@ -457,9 +504,10 @@ def predict_to_device_arrays(arr, worker, loc_dict, nparts):
         nrows = len(X)
         part_size = ceil(nrows / nparts)
         up_limit = min((part_number+1)*part_size, nrows)
-        mat = X.compute(order='F').as_gpu_matrix()
-        pred = cuda.to_device(np.zeros(up_limit-(part_number*part_size)))
-        mats.append([mat, coef, pred])
+        mat = X.compute().as_gpu_matrix(order='F')
+        pred = cuda.to_device(np.zeros(up_limit-(part_number*part_size),
+                                       dtype=dtype))
+        mats.append([mat, coef.to_gpu_array(), pred])
 
     dev = device_of_devicendarray(mats[0][0])
 
@@ -475,15 +523,15 @@ def preprocess_on_worker(arr):
     return arr
 
 
-def dev_array_on_worker(rows, cols):
-    return cuda.to_device(np.zeros((rows, cols)))
+def dev_array_on_worker(rows, dtype=np.float64, unique=0):
+    return cuda.to_device(np.zeros(rows, dtype=dtype))
 
 
 # Need to have different named function for predict to avoid
 # dask key colision in case of same rows and columns between
 # different arrays
-def pred_array_on_worker(rows, cols):
-    return cuda.to_device(np.zeros((rows, cols)))
+def pred_array_on_worker(rows, cols, dtype=np.float64, unique=0):
+    return cuda.to_device(np.zeros((rows, cols), dtype=dtype))
 
 
 def preprocess_predict(arr):
@@ -509,3 +557,12 @@ def series_on_worker(ary, worker, loc_dict, nparts, X):
 def get_meta(df):
     ret = df.iloc[:0]
     return ret
+
+
+def coef_on_worker(coef, part_number, ncols, nparts, worker):
+        part_size = ceil(ncols / nparts)
+        up_limit = min((part_number+1)*part_size, ncols)
+        idx = (part_number*part_size, up_limit)
+        ret = cudf.Series(coef, index=cudf.dataframe.RangeIndex(idx[0],
+                                                                idx[1]))
+        return ret
