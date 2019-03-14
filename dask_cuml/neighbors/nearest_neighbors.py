@@ -340,7 +340,7 @@ def get_D_meta(arrs):
 
 class NearestNeighbors(object):
     """
-    Data-parallel Multi-Node Multi-GPU kNN Model.
+    Model-parallel Multi-GPU kNN Model.
 
     Data is spread across Dask workers using Dask cuDF. A single worker is chosen to create a series of kNN indices,
     one for each chunk of the Dask input, across the devices on that host. Results will reflect the global order,
