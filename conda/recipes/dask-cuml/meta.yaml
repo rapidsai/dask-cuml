@@ -29,16 +29,26 @@ build:
 requirements:
   build:
     - python
+    - cudf
+    - dask >=0.19.0
+    - distributed >=1.23.0
+    - dask_cudf
+    - dask_cuda
   run:
     - python
     - cudf
     - dask >=0.19.0
     - distributed >=1.23.0
-		- cuml
-		- dask_cudf
+    - dask_cudf
+    - dask_cuda
 test:
   imports:
+    - python
+    - cudf
+    - dask >=0.19.0
+    - distributed >=1.23.0
     - dask_cudf
+    - dask_cuda
 
 about:
   home: http://rapids.ai
