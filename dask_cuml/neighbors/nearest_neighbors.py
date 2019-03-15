@@ -340,7 +340,7 @@ def get_D_meta(arrs):
 
 class NearestNeighbors(object):
     """
-    Data-parallel Multi-Node Multi-GPU kNN Model.
+    Model-parallel Multi-GPU kNN Model.
 
     Data is spread across Dask workers using Dask cuDF. A single worker is chosen to create a series of kNN indices,
     one for each chunk of the Dask input, across the devices on that host. Results will reflect the global order,
@@ -507,14 +507,6 @@ class NearestNeighbors(object):
 
         return D_ddf, I_ddf
 
-
-    def get(self, indices):
-        """
-        Returns the vectors from the knn index for a list of indices.
-        :param indices:
-        :return:
-        """
-        pass
 
     @staticmethod
     def _build_host_dict(gpu_futures, client):
