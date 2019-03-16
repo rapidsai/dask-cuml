@@ -112,6 +112,7 @@ class LinearRegression(object):
             coefs.append(client.submit(dev_array_on_worker,
                                        up_limit - i*part_size,
                                        dtype=dtype,
+                                       unique=np.random.randint(0, 1e6),
                                        workers=[loc_dict[i]]))
             yield wait(coefs)
             del(loc_cudf)
