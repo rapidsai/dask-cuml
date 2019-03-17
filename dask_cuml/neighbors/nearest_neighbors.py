@@ -143,9 +143,9 @@ def _fit_on_worker(data, params):
 
     m = cumlKNN(should_downcast = params["should_downcast"])
     m._fit_mg(params["D"], final_allocs)
-
-    [t[1].close() for t in open_ipcs]
-    [t[1].join() for t in open_ipcs]
+    #
+    # [t[1].close() for t in open_ipcs]
+    # [t[1].join() for t in open_ipcs]
 
     return m
 
@@ -161,7 +161,6 @@ def _kneighbors_on_worker(data, m, params):
     :param params:
     :return:
     """
-
     ipc_dev_list, devarrs_dev_list = data
 
     device_handle_map = defaultdict(list)
@@ -351,6 +350,7 @@ class NearestNeighbors(object):
         self.master_host = None
         self.should_downcast = should_downcast
         self.n_neighbors = n_neighbors
+        self.gpu_futures = None
 
     def fit(self, ddf):
         """
@@ -358,11 +358,13 @@ class NearestNeighbors(object):
         :param futures:
         :return:
         """
+
         client = default_client()
 
         # Keep the futures around so the GPU memory doesn't get
         # deallocated on the workers.
         gpu_futures, cols = client.sync(self._get_mg_info, ddf)
+        self.gpu_futures = gpu_futures
 
         host_dict = self._build_host_dict(gpu_futures, client).items()
         if len(host_dict) > 1:
@@ -392,10 +394,12 @@ class NearestNeighbors(object):
                                {"D": cols, "should_downcast":self.should_downcast},
                                workers=[exec_node]))
 
+
         wait(f)
 
         # The model on each unique host is held for futures queries
         self.model = f
+
 
     @gen.coroutine
     def _kneighbors(self, X, k):
