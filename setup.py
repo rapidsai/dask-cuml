@@ -36,7 +36,7 @@ setup(name="dask_cuml",
         "Programming Language :: Python :: 3.7"
       ],
       author="NVIDIA Corporation",
-      url="https://github.com/rapidsai/dask_cuml",
+      url="https://github.com/rapidsai/dask-cuml",
       install_requires=install_requires,
       license="Apache Software License 2.0",
       cmdclass=versioneer.get_cmdclass(),
