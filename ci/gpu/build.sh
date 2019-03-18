@@ -27,6 +27,10 @@ env
 logger "Check GPU usage..."
 nvidia-smi
 
+logger "Activate conda env..."
+source activate gdf
+conda install -c nvidia -c rapidsai -c conda-forge -c defaults -c rapidsai -c rapidsai-nightly cuml dask distributed cudf dask_cudf
+
 logger "Check versions..."
 python --version
 $CC --version
@@ -36,9 +40,6 @@ conda list
 ################################################################################
 # BUILD - Build dask-cuml from source
 ################################################################################
-
-logger "Install dask-cuml dependencies"
-conda install -c nvidia -c rapidsai -c conda-forge -c defaults -c rapidsai -c rapidsai-nightly cuml dask distributed cudf dask_cudf
 
 logger "Build Dask cuML..."
 cd $WORKSPACE/
