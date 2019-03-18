@@ -26,7 +26,7 @@ packages = ["dask_cuml",
             "dask_cuml.neighbors",
             "dask_cuml.linear_model"]
 
-setup(name="dask_cuml",
+setup(name="dask-cuml",
       description="Distributed ML algorithms on GPUs using Dask",
       version=versioneer.get_version(),
       classifiers=[
