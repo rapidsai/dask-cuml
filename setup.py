@@ -26,7 +26,7 @@ packages = ["dask_cuml",
             "dask_cuml.neighbors",
             "dask_cuml.linear_model"]
 
-setup(name="dask_cuml",
+setup(name="dask-cuml",
       description="Distributed ML algorithms on GPUs using Dask",
       version=versioneer.get_version(),
       classifiers=[
@@ -36,7 +36,7 @@ setup(name="dask_cuml",
         "Programming Language :: Python :: 3.7"
       ],
       author="NVIDIA Corporation",
-      url="https://github.com/rapidsai/dask_cuml",
+      url="https://github.com/rapidsai/dask-cuml",
       install_requires=install_requires,
       license="Apache Software License 2.0",
       cmdclass=versioneer.get_cmdclass(),
