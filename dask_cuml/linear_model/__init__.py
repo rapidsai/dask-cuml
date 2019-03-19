@@ -14,4 +14,4 @@
 # limitations under the License.
 #
 
-from dask_cuml.linear_model.linear_regression import LinearRegression
+from dask_cuml.linear_model.linear_regression import LinearRegression  # NOQA
