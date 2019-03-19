@@ -542,9 +542,9 @@ def get_meta(df):
 
 
 def coef_on_worker(coef, part_number, ncols, nparts, worker):
-        part_size = ceil(ncols / nparts)
-        up_limit = min((part_number+1)*part_size, ncols)
-        idx = (part_number*part_size, up_limit)
-        ret = cudf.Series(coef, index=cudf.dataframe.RangeIndex(idx[0],
-                                                                idx[1]))
-        return ret
+    part_size = ceil(ncols / nparts)
+    up_limit = min((part_number+1)*part_size, ncols)
+    idx = (part_number*part_size, up_limit)
+    ret = cudf.Series(coef, index=cudf.dataframe.RangeIndex(idx[0],
+                                                            idx[1]))
+    return ret
