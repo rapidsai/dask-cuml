@@ -360,7 +360,7 @@ def _fit_on_worker(data, params):
         alloc_info.append(locals)
 
     try:
-        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS  # NOQA
         ols = cuOLS()
         intercept = ols._fit_mg(alloc_info, params)
     except Exception as e:
@@ -407,7 +407,7 @@ def _predict_on_worker(data, intercept, params):
         alloc_info.append(locals)
 
     try:
-        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS  # NOQA
         ols = cuOLS()
         ols._predict_mg(alloc_info, intercept, params)
 
