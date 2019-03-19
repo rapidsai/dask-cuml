@@ -13,7 +13,7 @@
 # limitations under the License.
 #
 
-from dask.distributed import Client, wait
+from dask.distributed import Client
 from dask_cuda import LocalCUDACluster
 import pytest
 from sklearn.metrics import mean_squared_error
@@ -23,8 +23,8 @@ import numpy as np
 import os
 
 
-def load_data(nrows, ncols, cached = 'data/mortgage.npy.gz'):
-    #Loading intop pandas to not create any clusters before LocalCUDACluster
+def load_data(nrows, ncols, cached='data/mortgage.npy.gz'):
+    # Loading intop pandas to not create any clusters before LocalCUDACluster
     if os.path.exists(cached):
         print('use mortgage data')
         with gzip.open(cached) as f:
@@ -48,7 +48,7 @@ def load_data(nrows, ncols, cached = 'data/mortgage.npy.gz'):
 
 @pytest.mark.skip(reason="Test should be run only with libcuML.so")
 @pytest.mark.parametrize('datatype', [np.float32, np.float64])
-def test_ols():
+def test_ols(datatype):
 
     cluster = LocalCUDACluster(threads_per_worker=1)
     client = Client(cluster)
