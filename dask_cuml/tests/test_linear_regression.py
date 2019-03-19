@@ -47,8 +47,7 @@ def load_data(nrows, ncols, cached='data/mortgage.npy.gz'):
 
 
 @pytest.mark.skip(reason="Test should be run only with libcuML.so")
-@pytest.mark.parametrize('datatype', [np.float32, np.float64])
-def test_ols(datatype):
+def test_ols():
 
     cluster = LocalCUDACluster(threads_per_worker=1)
     client = Client(cluster)
