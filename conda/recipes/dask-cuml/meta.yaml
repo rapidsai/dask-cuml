@@ -43,7 +43,6 @@ requirements:
     - dask-cuda
 test:
   imports:
-    - python
     - cudf
     - dask
     - distributed
