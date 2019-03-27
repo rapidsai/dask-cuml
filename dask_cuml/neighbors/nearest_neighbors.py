@@ -265,12 +265,11 @@ def build_dask_dfs(arrs, params):
     :return:
     """
 
-    if arrs is None:
-        return None
-
-    arr, dev, idx = arrs
-
     with numba.cuda.gpus[0]:
+        if arrs is None:
+            return None
+
+        arr, dev, idx = arrs
         X, I_ndarr, D_ndarr = arr[0]
 
         I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
