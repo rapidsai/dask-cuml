@@ -80,6 +80,12 @@ def test_end_to_end():
     cuml_I_nd = np.array(cuml_I.compute().as_gpu_matrix(), dtype=sk_I.dtype)
     cuml_D_nd = np.array(cuml_D.compute().as_gpu_matrix(), dtype=sk_D.dtype)
 
+    cuml_I_nd = np.sort(cuml_I_nd, axis=0)
+    cuml_D_nd = np.sort(cuml_D_nd, axis=0)
+
+    sk_I = np.sort(sk_I, axis=0)
+    sk_D = np.sort(sk_D, axis=0)
+
     print(str(cuml_D_nd.dtype))
     print(str(sk_D.dtype))
 
