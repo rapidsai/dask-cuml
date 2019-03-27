@@ -34,9 +34,9 @@ def test_end_to_end():
     from dask_cuml.neighbors import NearestNeighbors as cumlKNN
 
     def create_df(f, m, n):
-        X = np.random.rand(m, n)
+        X = np.random.uniform(-1, 1, (m, n))
         ret = cudf.DataFrame([(i,
-                               list(X[:, i].astype(np.float32))) for i in range(n)],
+                               X[:, i].astype(np.float32)) for i in range(n)],
                              index=cudf.dataframe.RangeIndex(f * m,
                                                              f * m + m, 1))
         return ret
