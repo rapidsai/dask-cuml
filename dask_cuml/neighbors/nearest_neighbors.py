@@ -265,26 +265,26 @@ def build_dask_dfs(arrs, params):
     :return:
     """
 
-    if arrs is None:
-        return None
+    with numba.cuda.gpus[0]:
+        if arrs is None:
+            return None
 
-    arr, dev, idx = arrs
+        arr, dev, idx = arrs
+        X, I_ndarr, D_ndarr = arr[0]
 
-    X, I_ndarr, D_ndarr = arr[0]
+        I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
+        D_ndarr = D_ndarr.reshape((X.shape[0], params["k"]))
 
-    I_ndarr = I_ndarr.reshape((X.shape[0], params["k"]))
-    D_ndarr = D_ndarr.reshape((X.shape[0], params["k"]))
+        Ix = cudf.DataFrame(index=cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
+        D = cudf.DataFrame(index=cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
 
-    Ix = cudf.DataFrame(index=cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
-    D = cudf.DataFrame(index=cudf.dataframe.RangeIndex(idx[0], idx[1]+1))
+        for i in range(0, params["k"]):
+            Ix[str(i)] = I_ndarr[:, i]
 
-    for i in range(0, params["k"]):
-        Ix[str(i)] = I_ndarr[:, i]
+        for i in range(0, params["k"]):
+            D[str(i)] = D_ndarr[:, i]
 
-    for i in range(0, params["k"]):
-        D[str(i)] = D_ndarr[:, i]
-
-    return Ix, D, idx
+        return Ix, D, idx
 
 
 def get_idx(arrs):
