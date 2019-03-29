@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #
 # Copyright (c) 2019, NVIDIA CORPORATION.
 #
@@ -13,4 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-$PYTHON setup.py install
+
+cd $WORKSPACE
+python setup.py install

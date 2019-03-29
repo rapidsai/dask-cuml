@@ -13,20 +13,15 @@
 # limitations under the License.
 #
 
-from dask.distributed import wait, default_client
-
-import cuml
-
-from cuml.utils import device_of_gpu_matrix
-
 import logging
 import numba.cuda
 import random
-
-from threading import Lock, Thread
 import time
-
 import os
+
+from cuml.utils import device_of_gpu_matrix
+from dask.distributed import wait, default_client
+from threading import Lock, Thread
 
 
 def get_visible_devices():
@@ -45,17 +40,17 @@ def get_device_id(canonical_name):
     for dev in dev_order:
         if dev == canonical_name:
             return idx
-        idx+=1
+        idx += 1
 
     return -1
 
 
 class IPCThread(Thread):
     """
-    This mechanism gets around Numba's restriction of CUDA contexts being thread-local
-    by creating a thread that can select its own device. This allows the user of IPC
-    handles to open them up directly on the same device as the owner (bypassing the
-    need for peer access.)
+    This mechanism gets around Numba's restriction of CUDA contexts being
+    thread-local by creating a thread that can select its own device.
+    This allows the user of IPC handles to open them up directly on the
+    same device as the owner (bypassing the need for peer access.)
     """
 
     def __init__(self, ipcs, device):
@@ -68,14 +63,16 @@ class IPCThread(Thread):
         # Use canonical device id
         self.device = get_device_id(device)
 
-        print("Starting new IPC thread on device %i for ipcs %s" % (self.device, str(list(ipcs))))
+        print("Starting new IPC thread on device %i for ipcs %s" %
+              (self.device, str(list(ipcs))))
         self.running = False
 
     def run(self):
 
         select_device(self.device)
 
-        print("Opening: " + str(self.device) + " " + str(numba.cuda.get_current_device()))
+        print("Opening: " + str(self.device) + " "
+              + str(numba.cuda.get_current_device()))
 
         self.lock.acquire()
 
@@ -85,7 +82,8 @@ class IPCThread(Thread):
 
             self.running = True
         except Exception as e:
-            logging.error("Error opening ipc_handle on device " + str(self.device) + ": " + str(e))
+            logging.error("Error opening ipc_handle on device " +
+                          str(self.device) + ": " + str(e))
 
         self.lock.release()
 
@@ -93,18 +91,21 @@ class IPCThread(Thread):
             time.sleep(0.0001)
 
         try:
-            logging.warn("Closing: " + str(self.device) + str(numba.cuda.get_current_device()))
+            logging.warn("Closing: " + str(self.device) +
+                         str(numba.cuda.get_current_device()))
             self.lock.acquire()
             [ipc.close() for ipc in self.ipcs]
             self.lock.release()
+
         except Exception as e:
-            logging.error("Error closing ipc_handle on device " + str(self.device) + ": " + str(e))
+            logging.error("Error closing ipc_handle on device " +
+                          str(self.device) + ": " + str(e))
 
     def close(self):
 
         """
-        This should be called before calling join(). Otherwise, IPC handles may not be
-        properly cleaned up.
+        This should be called before calling join(). Otherwise, IPC handles
+        may not be properly cleaned up.
         """
         self.lock.acquire()
         self.running = False
@@ -149,7 +150,6 @@ def parse_host_port(address):
     return host, port
 
 
-
 def build_host_dict(workers):
     hosts = set(map(lambda x: parse_host_port(x), workers))
     hosts_dict = {}
@@ -166,14 +166,15 @@ def assign_gpus():
     client = default_client()
 
     """
-    Supports a multi-GPU & multi-Node environment by assigning a single local GPU
-    to each worker in the cluster. This is necessary due to Numba's restriction
-    that only a single CUDA context (and thus a single device) can be active on a 
-    thread at a time. 
+    Supports a multi-GPU & multi-Node environment by assigning a single local
+    GPU to each worker in the cluster. This is necessary due to Numba's
+    restriction that only a single CUDA context (and thus a single device)
+    can be active on a thread at a time.
 
-    The GPU assignments are valid as long as the future returned from this function
-    is held in scope. This allows any functions that need to allocate GPU data to
-    utilize the CUDA context on the same device, otherwise data could be lost.
+    The GPU assignments are valid as long as the future returned from this
+    function is held in scope. This allows any functions that need to allocate
+    GPU data to utilize the CUDA context on the same device, otherwise data
+    could be lost.
     """
 
     workers = list(client.has_what().keys())
@@ -185,8 +186,11 @@ def assign_gpus():
         import numba.cuda
         return [x.id for x in numba.cuda.gpus]
 
-    gpu_info = dict([(host, client.submit(get_gpu_info,
-                                          workers=[(host, random.sample(hosts_dict[host], 1)[0])]))
+    gpu_info = dict([(host,
+                      client.submit(get_gpu_info,
+                                    workers=[(host,
+                                              random.sample(hosts_dict[host],
+                                                            1)[0])]))
                      for host in hosts_dict])
     wait(list(gpu_info.values()))
 
@@ -194,9 +198,11 @@ def assign_gpus():
     f = []
     for host, future in gpu_info.items():
         gpu_ids = future.result()
-        ports = random.sample(hosts_dict[host], min(len(gpu_ids), len(hosts_dict[host])))
+        ports = random.sample(hosts_dict[host],
+                              min(len(gpu_ids), len(hosts_dict[host])))
 
-        f.extend([client.scatter(device_id, workers=[(host, port)]) for device_id, port in zip(gpu_ids, ports)])
+        f.extend([client.scatter(device_id, workers=[(host, port)])
+                 for device_id, port in zip(gpu_ids, ports)])
 
     wait(f)
 

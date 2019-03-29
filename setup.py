@@ -18,20 +18,15 @@ from setuptools import setup
 import versioneer
 
 install_requires = [
-  'numpy',
-  'dask',
-  'distributed',
-  'cudf',
-  'dask_cuda',
-  'dask_cudf',
-  'pytest'
+  'numpy'
 ]
 
 packages = ["dask_cuml",
             "dask_cuml.tests",
-            "dask_cuml.neighbors"]
+            "dask_cuml.neighbors",
+            "dask_cuml.linear_model"]
 
-setup(name="dask_cuml",
+setup(name="dask-cuml",
       description="Distributed ML algorithms on GPUs using Dask",
       version=versioneer.get_version(),
       classifiers=[
@@ -41,7 +36,7 @@ setup(name="dask_cuml",
         "Programming Language :: Python :: 3.7"
       ],
       author="NVIDIA Corporation",
-      url="https://github.com/rapidsai/dask_cuml",
+      url="https://github.com/rapidsai/dask-cuml",
       install_requires=install_requires,
       license="Apache Software License 2.0",
       cmdclass=versioneer.get_cmdclass(),
