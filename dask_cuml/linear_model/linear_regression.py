@@ -367,7 +367,7 @@ def _fit_on_worker(data, params):
         print("FAILURE in FIT: " + str(e))
 
     [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    # [t.join() for t in open_ipcs]
 
     return intercept
 
@@ -415,7 +415,7 @@ def _predict_on_worker(data, intercept, params):
         print("Failure in predict(): " + str(e))
 
     [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    # [t.join() for t in open_ipcs]
 
 
 def group(lst, n):
