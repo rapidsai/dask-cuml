@@ -360,14 +360,14 @@ def _fit_on_worker(data, params):
         alloc_info.append(locals)
 
     try:
-        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS  # NOQA
         ols = cuOLS()
         intercept = ols._fit_mg(alloc_info, params)
     except Exception as e:
         print("FAILURE in FIT: " + str(e))
 
     [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    # [t.join() for t in open_ipcs]
 
     return intercept
 
@@ -407,7 +407,7 @@ def _predict_on_worker(data, intercept, params):
         alloc_info.append(locals)
 
     try:
-        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS
+        from cuml.linear_model.linear_regression_mg import LinearRegressionMG as cuOLS  # NOQA
         ols = cuOLS()
         ols._predict_mg(alloc_info, intercept, params)
 
@@ -415,7 +415,7 @@ def _predict_on_worker(data, intercept, params):
         print("Failure in predict(): " + str(e))
 
     [t.close() for t in open_ipcs]
-    [t.join() for t in open_ipcs]
+    # [t.join() for t in open_ipcs]
 
 
 def group(lst, n):
@@ -542,9 +542,9 @@ def get_meta(df):
 
 
 def coef_on_worker(coef, part_number, ncols, nparts, worker):
-        part_size = ceil(ncols / nparts)
-        up_limit = min((part_number+1)*part_size, ncols)
-        idx = (part_number*part_size, up_limit)
-        ret = cudf.Series(coef, index=cudf.dataframe.RangeIndex(idx[0],
-                                                                idx[1]))
-        return ret
+    part_size = ceil(ncols / nparts)
+    up_limit = min((part_number+1)*part_size, ncols)
+    idx = (part_number*part_size, up_limit)
+    ret = cudf.Series(coef, index=cudf.dataframe.RangeIndex(idx[0],
+                                                            idx[1]))
+    return ret
