@@ -14,6 +14,7 @@ function logger() {
 export PATH=/conda/bin:/usr/local/cuda/bin:$PATH
 export PARALLEL_LEVEL=4
 export CUDA_REL=${CUDA_VERSION%.*}
+export BRANCH_VERSION=0.7.*
 
 # Set home to the job's workspace
 export HOME=$WORKSPACE
@@ -31,8 +32,10 @@ nvidia-smi
 logger "Activate conda env..."
 source activate gdf
 
-logger "conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge -c defaults -c rapidsai-nightly/label/cuda$CUDA_REL cuml dask distributed cudf dask-cudf dask-cuda"
-conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge -c defaults -c rapidsai-nightly/label/cuda$CUDA_REL cuml dask distributed cudf dask-cudf dask-cuda
+logger "conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge \
+    cuml=$BRANCH_VERSION dask distributed cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION"
+conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge \
+    cuml=$BRANCH_VERSION dask distributed cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION
 
 logger "Check versions..."
 python --version
