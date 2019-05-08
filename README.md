@@ -64,7 +64,7 @@ Dask cuML can be installed using the `rapidsai` conda channel (if you have CUDA 
 dependency to `cudatoolkit=9.2` instead):
 
 ```bash
-conda install -c nvidia -c rapidsai -c conda-forge -c pytorch -c defaults dask-cuml cudatoolkit=10.0
+conda install -c nvidia -c rapidsai -c conda-forge -c defaults dask-cuml cudatoolkit=10.0
 ```
 
 #### Pip
