@@ -50,7 +50,6 @@ Note: If starting Dask workers using `dask-worker`,  `--nprocs 1` must be used.
 ## Supported Algorithms
 
 - Nearest Neighbors
-- Truncated Singular Value Decomposition
 - Linear Regression
 
 More ML algorithms are being worked on. 
@@ -61,9 +60,11 @@ Dask cuML relies on cuML to be installed. Refer to [cuML](https://github.com/rap
 
 #### Conda 
 
-Dask cuML can be installed using the `rapidsai` conda channel:
+Dask cuML can be installed using the `rapidsai` conda channel (if you have CUDA 9.2 installed, change the `cudatoolkit=10.0`
+dependency to `cudatoolkit=9.2` instead):
+
 ```bash
-conda install -c nvidia -c rapidsai -c conda-forge -c pytorch -c defaults dask_cuml
+conda install -c nvidia -c rapidsai -c conda-forge -c defaults dask-cuml cudatoolkit=10.0
 ```
 
 #### Pip
