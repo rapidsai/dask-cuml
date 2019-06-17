@@ -23,7 +23,7 @@ import logging
 
 import random
 
-from cuml import numba_utils
+from cuml.utils import numba_utils
 
 
 from dask import delayed
