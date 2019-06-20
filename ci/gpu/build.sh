@@ -43,7 +43,7 @@ logger "conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cu
     cuml=$BRANCH_VERSION dask distributed cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION"
 
 conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge \
-    cuml=$BRANCH_VERSION dask distributed cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION
+    cuml=$BRANCH_VERSION dask distributed=1.28.1* cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION
 
 logger "Check versions..."
 python --version
