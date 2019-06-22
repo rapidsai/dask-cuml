@@ -31,8 +31,16 @@ nvidia-smi
 logger "Activate conda env..."
 source activate gdf
 
-logger "conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge -c defaults -c rapidsai-nightly/label/cuda$CUDA_REL cuml dask distributed cudf dask-cudf dask-cuda"
-conda install -c rapidsai-nightly/label/cuda$CUDA_REL -c conda-forge -c defaults cuml=0.8.0 dask distributed cudf=0.8.0 dask-cudf dask-cuda=0.7
+logger "conda install -c conda-forge -c defaults -c rapidsai-nightly/label/cuda$CUDA_REL cuml=0.8 dask distributed cudf dask-cudf dask-cuda=0.7"
+conda install -c rapidsai-nightly/label/cuda$CUDA_REL \
+       -c conda-forge \
+       -c defaults \
+       cuml=0.8.0 \
+       dask \
+       distributed \
+       cudf=0.8.0 \
+       dask-cudf \
+       dask-cuda=0.7
 
 logger "Check versions..."
 python --version
