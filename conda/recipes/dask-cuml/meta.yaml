@@ -37,16 +37,17 @@ requirements:
     - python x.x
     - cudf {{ minor_version }}.*
     - dask >=0.19.0
-    - distributed >=1.23.0
+    - distributed
     - dask-cudf {{ minor_version }}.*
     - dask-cuda {{ minor_version }}.*
   run:
     - python
     - cudf {{ minor_version }}.*
     - dask >=0.19.0
-    - distributed >=1.23.0
+    - distributed
     - dask-cudf {{ minor_version }}.*
     - dask-cuda {{ minor_version }}.*
+    
 test:
   imports:
     - cudf

@@ -23,6 +23,8 @@ def test_end_to_end():
     cluster = LocalCUDACluster(threads_per_worker=1)
     client = Client(cluster)
 
+    print(client)
+
     # NOTE: The LocalCUDACluster needs to be started before any imports that
     # could potentially create a CUDA context.
 

@@ -39,11 +39,16 @@ nvidia-smi
 logger "Activate conda env..."
 source activate gdf
 
-logger "conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge \
-    cuml=$BRANCH_VERSION dask distributed cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION"
-
-conda install -c nvidia/label/cuda$CUDA_REL -c rapidsai-nightly/label/cuda$CUDA_REL -c rapidsai/label/cuda$CUDA_REL -c conda-forge \
-    cuml=$BRANCH_VERSION dask distributed=1.28.1* cudf=$BRANCH_VERSION dask-cudf=$BRANCH_VERSION dask-cuda=$BRANCH_VERSION
+logger "conda install -c conda-forge -c defaults -c rapidsai-nightly/label/cuda$CUDA_REL cuml=0.8 dask distributed cudf dask-cudf dask-cuda=0.7"
+conda install -c rapidsai-nightly/label/cuda$CUDA_REL \
+       -c conda-forge \
+       -c defaults \
+       cuml=$BRANCH_VERSION \
+       dask \
+       distributed \
+       cudf=$BRANCH_VERSION \
+       dask-cudf \
+       dask-cuda=$BRANCH_VERSION
 
 logger "Check versions..."
 python --version
