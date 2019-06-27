@@ -1,4 +1,4 @@
-# dask-cuML 0.8.0
+# dask-cuML 0.8.0 (27 June 2019)
 
 Note: dask-cuML will be merged into the cuML repository in future releases.
 
