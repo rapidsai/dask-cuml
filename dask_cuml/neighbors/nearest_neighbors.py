@@ -23,7 +23,7 @@ import logging
 
 import random
 
-from cuml import numba_utils
+from cuml.utils import numba_utils
 
 
 from dask import delayed
@@ -200,8 +200,8 @@ def _kneighbors_on_worker(data, m, params):
 
     for idx, allocs in alloc_info:
         X, inds, dists = allocs
-        m._kneighbors(X["data"][0], X["shape"][0], params["k"],
-                      inds["data"][0], dists["data"][0])
+        m._kneighbors(X["data"][0], X["shape"][0],
+                      inds["data"][0], dists["data"][0], params["k"])
 
     [t.close() for idx, t in open_ipcs]
     [t.join() for idx, t in open_ipcs]
