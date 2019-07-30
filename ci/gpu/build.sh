@@ -70,9 +70,8 @@ python setup.py build_ext --inplace
 
 if hasArg --skip-tests; then
     logger "Skipping Tests..."
-    exit 0
+else
+    logger "Python py.test for Dask cuML..."
+    cd $WORKSPACE
+    py.test --cache-clear --junitxml=${WORKSPACE}/junit-dask-cuml.xml -v --cov-config=.coveragerc --cov=dask_cuml --cov-report=xml:${WORKSPACE}/dask-cuml-coverage.xml --cov-report term
 fi
-
-logger "Python py.test for Dask cuML..."
-cd $WORKSPACE
-py.test --cache-clear --junitxml=${WORKSPACE}/junit-cuml.xml -v
