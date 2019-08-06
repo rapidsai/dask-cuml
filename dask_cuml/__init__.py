@@ -22,5 +22,6 @@ del get_versions
 __all__ = [
     "linear_model",
     "neighbors",
+    "randomforest",
     "core",
 ]
